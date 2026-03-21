@@ -40,6 +40,9 @@ def _apply_sae_latent_bump(
         recon = sae.decode(f)
         err = flat_work - recon
         f2 = f + a * d.unsqueeze(0)
+        # constant_norm_rescale: first decode() deletes x_norm_coeff on the SAE; second decode needs it.
+        if getattr(sae.cfg, "normalize_activations", None) == "constant_norm_rescale":
+            sae.encode(flat_work)
         recon2 = sae.decode(f2)
         out = recon2 + err
 
