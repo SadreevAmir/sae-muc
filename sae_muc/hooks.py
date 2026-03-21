@@ -26,8 +26,14 @@ def _apply_sae_latent_bump(
     flat = x.reshape(-1, orig_shape[-1])
     dev = flat.device
 
-    sae_dev = next(sae.parameters()).device
-    sae_dtype = sae.dtype
+    p0 = next(sae.parameters())
+    if p0.is_meta or str(p0.device) == "meta":
+        raise RuntimeError(
+            "SAE веса на устройстве 'meta' (нет данных). Перезапусти runtime, "
+            "прогони §1–§4 заново; не используй загрузку модели с meta/empty init для этой цепочки."
+        )
+    sae_dev = p0.device
+    sae_dtype = p0.dtype
     flat_work = flat.to(device=sae_dev, dtype=sae_dtype)
 
     d = delta.to(device=sae_dev, dtype=sae_dtype)
@@ -46,6 +52,11 @@ def _apply_sae_latent_bump(
         recon2 = sae.decode(f2)
         out = recon2 + err
 
+    if getattr(out, "is_meta", False):
+        raise RuntimeError(
+            "SAE вернул meta-тензор (часто после поломанного .to() на модуле). "
+            "Runtime → Restart, снова §1–§4; обнови sae-muc (hooks: редкий вызов sae.to)."
+        )
     out = out.to(dtype=orig_dtype, device=dev).view(orig_shape)
     return out
 
@@ -77,7 +88,9 @@ def register_sae_latent_hooks(
         # device_map="auto" даёт hf_device_map с диапазонами (model.layers.0-15), не по одному ключу на слой
         layer_mod = model.model.layers[l]
         device = next(layer_mod.parameters()).device
-        sae.to(device=device, dtype=sae.dtype)
+        # Не вызывать sae.to(dtype=...) при каждом register — на части связок PyTorch/SAELens это портит веса (meta).
+        if next(sae.parameters()).device != device:
+            sae.to(device=device)
 
         def make_hook(sae_ref=sae, delta_ref=delta, alpha_val=alpha):
             def hook_fn(module, inputs, outputs):
