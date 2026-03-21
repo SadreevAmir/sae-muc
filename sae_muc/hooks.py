@@ -78,8 +78,18 @@ def register_sae_latent_hooks(
 
         def make_hook(sae_ref=sae, delta_ref=delta, alpha_val=alpha):
             def hook_fn(module, inputs, outputs):
+                # transformers: чаще tuple (h, …); в новых версиях слой может вернуть один Tensor
+                if torch.is_tensor(outputs):
+                    h = outputs
+                    if h.shape[1] <= 1:
+                        return outputs
+                    h2 = _apply_sae_latent_bump(h, sae_ref, delta_ref, alpha_val)
+                    return h2
                 if not isinstance(outputs, tuple):
-                    raise TypeError("Expected tuple outputs from decoder layer")
+                    raise TypeError(
+                        f"Unexpected decoder layer output type {type(outputs)}; "
+                        "expected Tensor or tuple."
+                    )
                 h = outputs[0]
                 if h.shape[1] <= 1:
                     return outputs
