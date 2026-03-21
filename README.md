@@ -1,6 +1,6 @@
 # sae-muc
 
-Пакет [`sae_muc/`](sae_muc/) — интервенция в латентном пространстве предобученного SAE (SAELens). **Playground по умолчанию:** Llama 3.1 8B Instruct + релиз **Llama Scope residual** (`llama_scope_lxr_32x`) с разметкой на [Neuronpedia](https://www.neuronpedia.org/llama-scope). Пайплайн MUC под чекпоинты Meta по-прежнему на **Mistral** + `mistral-7b-res-wg`.
+Пакет [`sae_muc/`](sae_muc/) — интервенция в латентном пространстве предобученного SAE (SAELens). **Playground по умолчанию:** **Mistral 7B Instruct** + `mistral-7b-res-wg`. В том же ноутбуке можно переключиться на **Llama 3.1 + Llama Scope** (`llama_scope_lxr_32x`) и автоссылки [Neuronpedia](https://www.neuronpedia.org/llama-scope).
 
 **Colab (в корне репозитория):**
 
