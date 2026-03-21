@@ -65,15 +65,15 @@ def register_sae_latent_hooks(
         model._sae_muc_hooks[l].remove()
     model._sae_muc_hooks.clear()
 
-    hf_map = model.hf_device_map
     for l in process_layers:
         if l not in layer_to_sae or l not in layer_to_delta:
             continue
         sae = layer_to_sae[l]
         delta = layer_to_delta[l]
 
-        device_idx = hf_map[f"model.layers.{l}"]
-        device = torch.device(f"cuda:{device_idx}")
+        # device_map="auto" даёт hf_device_map с диапазонами (model.layers.0-15), не по одному ключу на слой
+        layer_mod = model.model.layers[l]
+        device = next(layer_mod.parameters()).device
         sae.to(device=device, dtype=sae.dtype)
 
         def make_hook(sae_ref=sae, delta_ref=delta, alpha_val=alpha):
