@@ -1,0 +1,8 @@
+# Минимум для sae_muc без остального репозитория Meta
+torch
+transformers>=4.40
+sae-lens>=6.0
+pandas
+numpy
+tqdm
+jsonlines
