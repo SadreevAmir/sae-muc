@@ -1,6 +1,6 @@
 # sae-muc
 
-Пакет [`sae_muc/`](sae_muc/) — интервенция в латентном пространстве предобученного SAE (SAELens, релиз `mistral-7b-res-wg`), совместимая по путям данных с [verbal_uncertainty_feature_calibration](https://github.com/facebookresearch/verbal_uncertainty_feature_calibration).
+Пакет [`sae_muc/`](sae_muc/) — интервенция в латентном пространстве предобученного SAE (SAELens). **Playground по умолчанию:** Llama 3.1 8B Instruct + релиз **Llama Scope residual** (`llama_scope_lxr_32x`) с разметкой на [Neuronpedia](https://www.neuronpedia.org/llama-scope). Пайплайн MUC под чекпоинты Meta по-прежнему на **Mistral** + `mistral-7b-res-wg`.
 
 **Colab (в корне репозитория):**
 

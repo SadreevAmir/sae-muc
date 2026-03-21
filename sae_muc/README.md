@@ -26,6 +26,8 @@ python -m sae_muc.build_intervention_config \
   --top_k 64
 ```
 
+Для **Llama 3.1 8B** (тот же `d_model`, что у Instruct) и релиза `llama_scope_lxr_32x` нужен `Hs_hedge` формы `[32, d_model]` под эту модель; затем `--release llama_scope_lxr_32x`, `--out_path .../llama_intervention.pt`.
+
 ## 2. Запуск MUC (iti_method=2 как в `semantic_control.py`)
 
 Из **родителя** каталога `sae_muc` (там же должны быть `datasets/`, `detection/`):
@@ -47,10 +49,9 @@ python -m sae_muc.run_muc \
 ## Размеченные признаки (Neuronpedia)
 
 Индексы ненулевых координат в `delta` — это **номера латентов SAE**. Чтобы открыть страницы с **autointerp** и примерами, используйте [Neuronpedia](https://www.neuronpedia.org): URL вида `.../[MODEL_ID]/[SAE_ID]/[index]`.  
-`SAE_ID` на сайте **другой**, чем в SAELens (`blocks.16.hook_resid_pre`) — его нужно скопировать из адресной строки выбранного SAE.
+Для **`llama_scope_lxr_32x`** slug’и Neuronpedia подставляются из `layer_map.neuronpedia_residual_slug` (модель `llama3.1-8b`, SAE вида `15-llamascope-res-131k`). Для других релизов `SAE_ID` в URL может отличаться от id в SAELens — копируйте из адресной строки на сайте.
 
-CLI для этого нет: импортируйте из `sae_muc.inspect_delta` функции `print_sparse_delta_report`, `neuronpedia_feature_urls`, `print_top_explanations` (см. `colab_sae_playground.ipynb`, секция 4b).  
-Релиз `mistral-7b-res-wg` на Neuronpedia может **отсутствовать**; тогда ищите ближайший опубликованный SAE для своей модели или смотрите только таблицу индексов.
+CLI для этого нет: импортируйте из `sae_muc.inspect_delta` функции `print_sparse_delta_report`, `neuronpedia_feature_urls`, `print_top_explanations` (см. `colab_sae_playground.ipynb`, секция 4b).
 
 Результаты: `sae_muc/outputs/{dataset}/{model}/{prompt}/{split}/with_sae_muc_*.jsonl`.
 
@@ -69,7 +70,7 @@ CLI для этого нет: импортируйте из `sae_muc.inspect_del
 | Детектор: `detection/LR_outputs/{ds}/{model}/{split}_verbal_uncertainty_sentence_semantic_entropy.json` | Тот же путь и поле `y_pred` |
 | CSV: `verbal_uncertainty`, `sentence_semantic_entropy`, `question` | Те же колонки |
 | Промпт MUC: `--prompt_type uncertainty` | Задаётся аргументом; **как в ячейке фазы 10** — `uncertainty` |
-| Слои: `range(15,32)` | Дефолт тот же; SAE реально цепляются только к **15 и 23** (релиз `mistral-7b-res-wg`; слой 7 в range не входит) |
+| Слои: `range(15,32)` | Дефолт тот же; с релизом **Mistral** SAE на **15 и 23** (слой 7 в range не входит). С **Llama Scope** в playground — те же HF-слои **15 и 23** |
 | `generate_all_responses` из `calibration/causal.py` | Импортируется без изменений |
 | Имя jsonl: `with_vufi_{iti}_{str_process_layers}_{max_alpha}.jsonl` | **Такое же имя** — можно подставить файл в `calibration/outputs/.../test/` и гонять **те же** `calibration/eval/*.py`, что в фазе 10.3 |
 | `Hs_hedge_universal.pt` для MUC | Для SAE берите **`.../merged/{model}/uncertainty/Hs_hedge_universal.pt`** (не `sentence`), чтобы соответствовать промпту `uncertainty` в фазе 7 |
@@ -85,5 +86,6 @@ python sae_muc/run_muc.py ... \
 
 ## Ограничения
 
-- Предобученные SAE в релизе — для **базового** Mistral-7B; с **Instruct** возможен сдвиг распределения.
-- Интервенция ставится только на HF-слоях, для которых есть запись в `mistral_intervention.pt` и которые попали в `--str_process_layers`.
+- SAE **Llama Scope** обучены на **базовой** Llama 3.1 8B; с **Instruct** возможен сдвиг распределения активаций (обычная практика для таких SAE).
+- Релиз **Mistral**: SAE под базовый Mistral-7B, с Instruct — тот же риск.
+- Интервенция ставится только на HF-слоях, для которых есть запись в `intervention.pt` и которые попали в `--str_process_layers`.

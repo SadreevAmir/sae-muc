@@ -4,7 +4,7 @@
 Neuronpedia URL: https://www.neuronpedia.org/[MODEL_ID]/[SAE_ID]/[FEATURE_INDEX]
 API JSON:        https://www.neuronpedia.org/api/feature/[MODEL_ID]/[SAE_ID]/[FEATURE_INDEX]
 
-SAE_ID на сайте не совпадает с id в SAELens (например blocks.16.hook_resid_pre).
+Для релиза `llama_scope_lxr_32x` slug’и совпадают с полем `neuronpedia` в SAELens yaml; для других релизов id на сайте может отличаться от SAELens.
 Его нужно взять из URL выбранного SAE на neuronpedia.org.
 """
 
