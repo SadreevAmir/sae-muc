@@ -44,6 +44,14 @@ python -m sae_muc.run_muc \
 
 Если `datasets/` не рядом с `sae_muc`, укажите `--repo_root /path/to/project`.
 
+## Размеченные признаки (Neuronpedia)
+
+Индексы ненулевых координат в `delta` — это **номера латентов SAE**. Чтобы открыть страницы с **autointerp** и примерами, используйте [Neuronpedia](https://www.neuronpedia.org): URL вида `.../[MODEL_ID]/[SAE_ID]/[index]`.  
+`SAE_ID` на сайте **другой**, чем в SAELens (`blocks.16.hook_resid_pre`) — его нужно скопировать из адресной строки выбранного SAE.
+
+CLI для этого нет: импортируйте из `sae_muc.inspect_delta` функции `print_sparse_delta_report`, `neuronpedia_feature_urls`, `print_top_explanations` (см. `colab_sae_playground.ipynb`, секция 4b).  
+Релиз `mistral-7b-res-wg` на Neuronpedia может **отсутствовать**; тогда ищите ближайший опубликованный SAE для своей модели или смотрите только таблицу индексов.
+
 Результаты: `sae_muc/outputs/{dataset}/{model}/{prompt}/{split}/with_sae_muc_*.jsonl`.
 
 ## Colab
