@@ -28,7 +28,7 @@ if str(_REPO_PARENT) not in sys.path:
 from sae_muc.layer_map import hf_layers_for_release
 
 
-def _delta_from_hedge_row(
+def delta_from_hedge_row(
     h_row: torch.Tensor,
     sae: SAE,
     top_k: int,
@@ -76,7 +76,7 @@ def main() -> None:
                 f"d_in mismatch: SAE expects {sae.cfg.d_in}, hedge has d_model={d_model}"
             )
         h_row = hedge[hf_layer]
-        delta = _delta_from_hedge_row(h_row, sae, args.top_k, args.sae_device)
+        delta = delta_from_hedge_row(h_row, sae, args.top_k, args.sae_device)
         layers_out[hf_layer] = {"sae_id": sae_id, "delta": delta}
 
     if not layers_out:
