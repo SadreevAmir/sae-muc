@@ -29,7 +29,7 @@ _REPO_PARENT = _PKG_DIR.parent
 if str(_REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(_REPO_PARENT))
 
-from sae_muc.generation import generate_all_responses
+from sae_muc.generation import generate_lines_for_batch
 from sae_muc.hooks import clear_sae_latent_hooks, register_sae_latent_hooks
 from sae_muc.layer_map import hf_layers_for_release
 from sae_muc.layers_util import parse_layers_str, process_layers_to_process
@@ -39,6 +39,19 @@ from sae_muc.prompts_mini import (
     make_sentence_user_content,
 )
 from sae_muc.vuf_hooks import clear_vuf_residual_hooks, register_vuf_residual_hooks
+
+
+def _chat_messages_for_question(question: str, prompt_type: str) -> list[dict]:
+    if prompt_type == "uncertainty":
+        return [
+            {"role": "system", "content": UNCERTAINTY_SYSTEM},
+            {"role": "user", "content": f"Question: {question}\nAnswer: "},
+        ]
+    if prompt_type == "plain":
+        return [{"role": "user", "content": make_plain_user_content(question)}]
+    if prompt_type == "sentence":
+        return [{"role": "user", "content": make_sentence_user_content(question)}]
+    raise ValueError(prompt_type)
 
 
 def resolve_repo_root(explicit: str | None) -> Path:
@@ -146,6 +159,7 @@ def get_answers_muc(
     layer_to_sae: dict[int, SAE] | None,
     layer_to_delta: dict[int, torch.Tensor] | None,
     hedge_2d: torch.Tensor | None,
+    gen_batch_size: int = 16,
 ) -> None:
     print("will save to", out_file)
 
@@ -157,72 +171,94 @@ def get_answers_muc(
     print("history_len", history_len)
     assert len(questions) == len(alphas) == len(detection_res)
 
-    for i, (question, alpha, dr) in tqdm(
-        enumerate(zip(questions, alphas, detection_res)),
-        total=len(questions),
-    ):
-        if i < history_len:
-            continue
+    n = len(questions)
+    bsz = max(1, int(gen_batch_size))
+    print("gen_batch_size (подряд одинаковые α и detection):", bsz)
 
-        if alpha == 0 or dr == 0:
+    def _skip_generation(alpha_f: float, dr) -> bool:
+        return float(alpha_f) == 0.0 or dr == 0
+
+    def _register_hooks(alpha_f: float) -> None:
+        if steering == "sae":
+            if layer_to_sae is None or layer_to_delta is None:
+                raise RuntimeError("SAE steering requires layer_to_sae and layer_to_delta.")
+            clear_vuf_residual_hooks(model)
+            clear_sae_latent_hooks(model)
+            register_sae_latent_hooks(
+                model,
+                layer_to_sae,
+                layer_to_delta,
+                hook_layers,
+                float(alpha_f),
+            )
+        elif steering == "residual":
+            if hedge_2d is None:
+                raise RuntimeError("Residual (article) steering requires hedge_2d.")
             clear_sae_latent_hooks(model)
             clear_vuf_residual_hooks(model)
-            line = {
-                "alpha": 0,
-                "question": question,
-                "most_likely_answer": "",
-                "responses": [],
-            }
-            with jsonlines.open(out_file, "a") as writer:
-                writer.write(line)
-        else:
-            if steering == "sae":
-                if layer_to_sae is None or layer_to_delta is None:
-                    raise RuntimeError("SAE steering requires layer_to_sae and layer_to_delta.")
-                clear_vuf_residual_hooks(model)
-                clear_sae_latent_hooks(model)
-                register_sae_latent_hooks(
-                    model,
-                    layer_to_sae,
-                    layer_to_delta,
-                    hook_layers,
-                    float(alpha),
-                )
-            elif steering == "residual":
-                if hedge_2d is None:
-                    raise RuntimeError("Residual (article) steering requires hedge_2d.")
-                clear_sae_latent_hooks(model)
-                clear_vuf_residual_hooks(model)
-                register_vuf_residual_hooks(
-                    model,
-                    hedge_2d,
-                    hook_layers,
-                    float(alpha),
-                )
-            else:
-                raise ValueError(f"Unknown steering: {steering}")
-
-            if prompt_type == "uncertainty":
-                messages = [
-                    {"role": "system", "content": UNCERTAINTY_SYSTEM},
-                    {"role": "user", "content": f"Question: {question}\nAnswer: "},
-                ]
-            elif prompt_type == "plain":
-                messages = [
-                    {"role": "user", "content": make_plain_user_content(question)},
-                ]
-            elif prompt_type == "sentence":
-                messages = [
-                    {"role": "user", "content": make_sentence_user_content(question)},
-                ]
-            else:
-                raise ValueError(prompt_type)
-            generate_all_responses(
-                model, tokenizer, [question], [messages], alpha, out_file, batch_size=1
+            register_vuf_residual_hooks(
+                model,
+                hedge_2d,
+                hook_layers,
+                float(alpha_f),
             )
+        else:
+            raise ValueError(f"Unknown steering: {steering}")
 
-        if i % 100 == 0:
-            torch.cuda.empty_cache()
+    i = history_len
+    with tqdm(total=n, initial=i, desc="questions") as pbar:
+        while i < n:
+            a0 = float(alphas[i])
+            dr0 = detection_res[i]
+
+            if _skip_generation(a0, dr0):
+                clear_sae_latent_hooks(model)
+                clear_vuf_residual_hooks(model)
+                with jsonlines.open(out_file, "a") as writer:
+                    while i < n:
+                        ai = float(alphas[i])
+                        dri = detection_res[i]
+                        if not _skip_generation(ai, dri):
+                            break
+                        writer.write(
+                            {
+                                "alpha": 0,
+                                "question": questions[i],
+                                "most_likely_answer": "",
+                                "responses": [],
+                            }
+                        )
+                        i += 1
+                        pbar.update(1)
+                if i % 100 == 0:
+                    torch.cuda.empty_cache()
+                continue
+
+            run_start = i
+            while i < n:
+                if float(alphas[i]) != a0 or detection_res[i] != dr0:
+                    break
+                if _skip_generation(float(alphas[i]), detection_res[i]):
+                    break
+                i += 1
+            run_end = i
+            i = run_start
+
+            _register_hooks(a0)
+            while i < run_end:
+                chunk_end = min(i + bsz, run_end)
+                batch_q = questions[i:chunk_end]
+                batch_m = [_chat_messages_for_question(q, prompt_type) for q in batch_q]
+                lines = generate_lines_for_batch(
+                    model, tokenizer, batch_q, batch_m, float(a0)
+                )
+                with jsonlines.open(out_file, "a") as writer:
+                    for line in lines:
+                        writer.write(line)
+                pbar.update(chunk_end - i)
+                i = chunk_end
+                if i % 100 == 0:
+                    torch.cuda.empty_cache()
 
 
 def main() -> None:
@@ -238,6 +274,13 @@ def main() -> None:
     parser.add_argument("--iti_method", type=int, default=2)
     parser.add_argument("--str_process_layers", type=str, default="range(15,32)")
     parser.add_argument("--max_alpha", type=float, default=1.0)
+    parser.add_argument(
+        "--alpha_step",
+        type=float,
+        default=0.0,
+        help="Если > 0: α после clip округляются до кратных этому шагу (напр. 5 при max_alpha=20). "
+        "Если 0: как раньше — np.round(..., 4).",
+    )
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--prompt_type", type=str, required=True)
     parser.add_argument(
@@ -264,6 +307,12 @@ def main() -> None:
         type=int,
         default=None,
         help="Dry run: только первые N строк датасета (после загрузки CSV).",
+    )
+    parser.add_argument(
+        "--gen_batch_size",
+        type=int,
+        default=16,
+        help="Сколько примеров с одинаковыми α и detection обрабатывать одним вызовом generate (GPU).",
     )
     parser.add_argument(
         "--vuf_layers",
@@ -345,7 +394,11 @@ def main() -> None:
 
     alphas = (su_scores / MAX_SE - vu_scores_llm) * MAX_ALPHA
     alphas = np.clip(alphas, 0, MAX_ALPHA)
-    alphas = np.round(alphas, 4)
+    step = float(args.alpha_step)
+    if step > 0:
+        alphas = np.clip(np.round(alphas / step) * step, 0, MAX_ALPHA)
+    else:
+        alphas = np.round(alphas, 4)
 
     base_name = f"with_vufi_{args.iti_method}_{args.str_process_layers}_{args.max_alpha}"
     if args.prompt_type != "uncertainty":
@@ -431,7 +484,10 @@ def main() -> None:
         layer_to_sae,
         layer_to_delta,
         hedge_2d,
+        gen_batch_size=args.gen_batch_size,
     )
+    os.environ["RUN_MUC_LAST_JSONL"] = str(Path(out_file).resolve())
+    print("RUN_MUC_LAST_JSONL", os.environ["RUN_MUC_LAST_JSONL"], flush=True)
 
 
 if __name__ == "__main__":
