@@ -12,5 +12,10 @@ def sentence_instruction_prefix() -> str:
     return "Please answer the following question.\n"
 
 
+def make_plain_user_content(question: str) -> str:
+    """Как user-часть у uncertainty, но без системного промпта про лингвистический hedge."""
+    return f"Question: {question}\nAnswer: "
+
+
 def make_sentence_user_content(question: str) -> str:
     return f"{sentence_instruction_prefix()}Question: {question}\nAnswer:"

@@ -33,7 +33,11 @@ from sae_muc.generation import generate_all_responses
 from sae_muc.hooks import clear_sae_latent_hooks, register_sae_latent_hooks
 from sae_muc.layer_map import hf_layers_for_release
 from sae_muc.layers_util import parse_layers_str, process_layers_to_process
-from sae_muc.prompts_mini import UNCERTAINTY_SYSTEM, make_sentence_user_content
+from sae_muc.prompts_mini import (
+    UNCERTAINTY_SYSTEM,
+    make_plain_user_content,
+    make_sentence_user_content,
+)
 from sae_muc.vuf_hooks import clear_vuf_residual_hooks, register_vuf_residual_hooks
 
 
@@ -203,6 +207,10 @@ def get_answers_muc(
                     {"role": "system", "content": UNCERTAINTY_SYSTEM},
                     {"role": "user", "content": f"Question: {question}\nAnswer: "},
                 ]
+            elif prompt_type == "plain":
+                messages = [
+                    {"role": "user", "content": make_plain_user_content(question)},
+                ]
             elif prompt_type == "sentence":
                 messages = [
                     {"role": "user", "content": make_sentence_user_content(question)},
@@ -340,6 +348,8 @@ def main() -> None:
     alphas = np.round(alphas, 4)
 
     base_name = f"with_vufi_{args.iti_method}_{args.str_process_layers}_{args.max_alpha}"
+    if args.prompt_type != "uncertainty":
+        base_name += f"_{args.prompt_type}"
     if args.steering == "residual":
         base_name += "_residual"
         base_name += "_L" + "-".join(str(l) for l in hook_layers)
