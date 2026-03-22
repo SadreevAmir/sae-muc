@@ -1,6 +1,21 @@
 """Parse --str_process_layers (same logic as src.utils.process_layers_to_process)."""
 
 
+def parse_layers_str(s: str) -> list[int]:
+    """
+    Список HF-индексов слоёв из строки:
+    - ``range(15,32)`` (как в --str_process_layers)
+    - ``15,23`` или ``15, 23, 7``
+    """
+    t = (s or "").strip()
+    if not t:
+        return []
+    if "range" in t:
+        return sorted(set(eval(t)))  # noqa: S307
+    parts = [p.strip() for p in t.split(",") if p.strip()]
+    return sorted({int(p) for p in parts})
+
+
 def process_layers_to_process(layers_to_process):
     if not layers_to_process:
         return []
