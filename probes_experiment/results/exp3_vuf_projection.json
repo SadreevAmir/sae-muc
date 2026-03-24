@@ -1,0 +1,170 @@
+{
+  "experiment": "exp3_vuf_projection",
+  "results": [
+    {
+      "method": "MLP_h128_hs_L17",
+      "auroc": 0.7086134050316882,
+      "acc": 0.644
+    },
+    {
+      "method": "MLP_h128_hs_L15",
+      "auroc": 0.7061327699891173,
+      "acc": 0.652
+    },
+    {
+      "method": "MLP_h64_hs_L15",
+      "auroc": 0.7028039178029575,
+      "acc": 0.65
+    },
+    {
+      "method": "MLP_h64_hs_L17",
+      "auroc": 0.7020997375328084,
+      "acc": 0.652
+    },
+    {
+      "method": "MLP_h64_hs_L18",
+      "auroc": 0.7017956596888804,
+      "acc": 0.644
+    },
+    {
+      "method": "MLP_h128_hs_L18",
+      "auroc": 0.7000992254017029,
+      "acc": 0.642
+    },
+    {
+      "method": "VUF_proj+resid_norm_L17",
+      "auroc": 0.6999071762371167,
+      "acc": 0.664
+    },
+    {
+      "method": "VUF_proj_L17",
+      "auroc": 0.6916170539658153,
+      "acc": 0.654
+    },
+    {
+      "method": "VUF_proj+resid_norm_L16",
+      "auroc": 0.6804461942257218,
+      "acc": 0.628
+    },
+    {
+      "method": "VUF_proj_L16",
+      "auroc": 0.6760130593431918,
+      "acc": 0.626
+    },
+    {
+      "method": "VUF_proj_L15",
+      "auroc": 0.6723801293131042,
+      "acc": 0.622
+    },
+    {
+      "method": "VUF_proj_L26",
+      "auroc": 0.6684431214390885,
+      "acc": 0.63
+    },
+    {
+      "method": "VUF_proj+resid_norm_L15",
+      "auroc": 0.6679149862364766,
+      "acc": 0.618
+    },
+    {
+      "method": "VUF_proj_L27",
+      "auroc": 0.6661545355611036,
+      "acc": 0.612
+    },
+    {
+      "method": "MLP_h16_VUF_proj",
+      "auroc": 0.6579604378720953,
+      "acc": 0.598
+    },
+    {
+      "method": "MLP_h32_VUF_proj",
+      "auroc": 0.6573682862812881,
+      "acc": 0.618
+    },
+    {
+      "method": "VUF_proj_all17",
+      "auroc": 0.6563920363613086,
+      "acc": 0.614
+    },
+    {
+      "method": "VUF_proj_L28",
+      "auroc": 0.655415786441329,
+      "acc": 0.612
+    },
+    {
+      "method": "VUF_proj_L23",
+      "auroc": 0.6546315856859357,
+      "acc": 0.634
+    },
+    {
+      "method": "MLP_h64_VUF_proj",
+      "auroc": 0.6544555406183983,
+      "acc": 0.612
+    },
+    {
+      "method": "VUF_proj+resid_norm_L18",
+      "auroc": 0.6519749055758275,
+      "acc": 0.634
+    },
+    {
+      "method": "VUF_proj_L24",
+      "auroc": 0.6509506433647013,
+      "acc": 0.614
+    },
+    {
+      "method": "VUF_proj_L25",
+      "auroc": 0.6508386146853594,
+      "acc": 0.62
+    },
+    {
+      "method": "VUF_proj_L22",
+      "auroc": 0.6493502336598169,
+      "acc": 0.616
+    },
+    {
+      "method": "VUF_proj_L18",
+      "auroc": 0.6487900902631073,
+      "acc": 0.634
+    },
+    {
+      "method": "VUF_proj_L30",
+      "auroc": 0.645941360988413,
+      "acc": 0.606
+    },
+    {
+      "method": "VUF_proj_L29",
+      "auroc": 0.6439568529543563,
+      "acc": 0.608
+    },
+    {
+      "method": "VUF_proj+resid_norm_L19",
+      "auroc": 0.634514435695538,
+      "acc": 0.598
+    },
+    {
+      "method": "VUF_proj_L20",
+      "auroc": 0.6271685551501184,
+      "acc": 0.592
+    },
+    {
+      "method": "VUF_proj+resid_norm_L20",
+      "auroc": 0.6268324691120927,
+      "acc": 0.59
+    },
+    {
+      "method": "VUF_proj_L21",
+      "auroc": 0.6261763011330901,
+      "acc": 0.596
+    },
+    {
+      "method": "VUF_proj_L19",
+      "auroc": 0.6225753792971,
+      "acc": 0.594
+    },
+    {
+      "method": "VUF_proj_L31",
+      "auroc": 0.6125728186415722,
+      "acc": 0.566
+    }
+  ]
+}

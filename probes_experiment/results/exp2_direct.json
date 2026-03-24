@@ -1,0 +1,135 @@
+{
+  "experiment": "exp2_direct",
+  "results": [
+    {
+      "method": "PCA32+LR_L17",
+      "auroc": 0.7243454324307022,
+      "acc": 0.674
+    },
+    {
+      "method": "PCA64+LR_L17",
+      "auroc": 0.717767748543627,
+      "acc": 0.652
+    },
+    {
+      "method": "PCA32+LR_all_layers",
+      "auroc": 0.7144388963574675,
+      "acc": 0.648
+    },
+    {
+      "method": "PCA64+LR_all_layers",
+      "auroc": 0.7144228922604188,
+      "acc": 0.646
+    },
+    {
+      "method": "PCA16+LR_L17",
+      "auroc": 0.7040682414698163,
+      "acc": 0.646
+    },
+    {
+      "method": "direct_L17",
+      "auroc": 0.6932334677677485,
+      "acc": 0.66
+    },
+    {
+      "method": "PCA128+LR_all_layers",
+      "auroc": 0.687103898598041,
+      "acc": 0.642
+    },
+    {
+      "method": "direct_L26",
+      "auroc": 0.6860316240957685,
+      "acc": 0.632
+    },
+    {
+      "method": "PCA128+LR_L17",
+      "auroc": 0.6847032840407143,
+      "acc": 0.616
+    },
+    {
+      "method": "direct_L28",
+      "auroc": 0.683711030023686,
+      "acc": 0.622
+    },
+    {
+      "method": "direct_L18",
+      "auroc": 0.6829268292682926,
+      "acc": 0.636
+    },
+    {
+      "method": "direct_L15",
+      "auroc": 0.6810543499135779,
+      "acc": 0.644
+    },
+    {
+      "method": "direct_L27",
+      "auroc": 0.6798220344408169,
+      "acc": 0.632
+    },
+    {
+      "method": "mean_layers",
+      "auroc": 0.6797100057614751,
+      "acc": 0.62
+    },
+    {
+      "method": "direct_L16",
+      "auroc": 0.6785096984828116,
+      "acc": 0.642
+    },
+    {
+      "method": "direct_L20",
+      "auroc": 0.6779175468920043,
+      "acc": 0.614
+    },
+    {
+      "method": "direct_L19",
+      "auroc": 0.6770533256513668,
+      "acc": 0.62
+    },
+    {
+      "method": "PCA8+LR_L17",
+      "auroc": 0.6763331412841687,
+      "acc": 0.646
+    },
+    {
+      "method": "direct_L29",
+      "auroc": 0.6724121375072019,
+      "acc": 0.632
+    },
+    {
+      "method": "direct_L25",
+      "auroc": 0.6709877728698546,
+      "acc": 0.632
+    },
+    {
+      "method": "direct_L22",
+      "auroc": 0.6688912361564561,
+      "acc": 0.612
+    },
+    {
+      "method": "direct_L30",
+      "auroc": 0.6671627936751808,
+      "acc": 0.622
+    },
+    {
+      "method": "direct_L23",
+      "auroc": 0.6671147813840342,
+      "acc": 0.62
+    },
+    {
+      "method": "direct_L21",
+      "auroc": 0.6670507649958389,
+      "acc": 0.61
+    },
+    {
+      "method": "direct_L24",
+      "auroc": 0.6544235324243006,
+      "acc": 0.632
+    },
+    {
+      "method": "direct_L31",
+      "auroc": 0.6484219960309839,
+      "acc": 0.618
+    }
+  ]
+}

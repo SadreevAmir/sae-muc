@@ -1,0 +1,79 @@
+[
+  {
+    "approach": "Raw raw SE+VU \u2192 LR",
+    "auroc": 0.776966903527303,
+    "acc": 0.71,
+    "details": "calculated SE/VU",
+    "exp": "baseline"
+  },
+  {
+    "approach": "Raw raw SE only \u2192 LR",
+    "auroc": 0.7488397029639589,
+    "acc": 0.686,
+    "details": "calculated SE/VU",
+    "exp": "baseline"
+  },
+  {
+    "approach": "Raw raw VU only \u2192 LR",
+    "auroc": 0.7359243966455411,
+    "acc": 0.678,
+    "details": "calculated SE/VU",
+    "exp": "baseline"
+  },
+  {
+    "approach": "Probe SE+VU \u2192 LR",
+    "auroc": 0.7336758210101786,
+    "acc": 0.672,
+    "details": "L17 SE+VU",
+    "exp": "exp1"
+  },
+  {
+    "approach": "Direct LR on hs",
+    "auroc": 0.7243454324307022,
+    "acc": 0.674,
+    "details": "PCA32+LR_L17",
+    "exp": "exp2"
+  },
+  {
+    "approach": "PCA + LR on hs",
+    "auroc": 0.7243454324307022,
+    "acc": 0.674,
+    "details": "PCA32+LR_L17",
+    "exp": "exp2"
+  },
+  {
+    "approach": "MLP_h128_hs_L17",
+    "auroc": 0.7086134050316882,
+    "acc": 0.644,
+    "details": "VUF projection",
+    "exp": "exp3"
+  },
+  {
+    "approach": "MLP_h128_hs_L15",
+    "auroc": 0.7061327699891173,
+    "acc": 0.652,
+    "details": "VUF projection",
+    "exp": "exp3"
+  },
+  {
+    "approach": "MLP_h64_hs_L15",
+    "auroc": 0.7028039178029575,
+    "acc": 0.65,
+    "details": "VUF projection",
+    "exp": "exp3"
+  },
+  {
+    "approach": "MLP_h64_hs_L17",
+    "auroc": 0.7020997375328084,
+    "acc": 0.652,
+    "details": "VUF projection",
+    "exp": "exp3"
+  },
+  {
+    "approach": "MLP_h64_hs_L18",
+    "auroc": 0.7017956596888804,
+    "acc": 0.644,
+    "details": "VUF projection",
+    "exp": "exp3"
+  }
+]
