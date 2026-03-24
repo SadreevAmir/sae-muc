@@ -1,0 +1,47 @@
+{
+  "dataset": "NQ-Open",
+  "model": "Mistral-7B-Instruct-v0.3",
+  "muc_config": "iti_method=2, range(15,32), max_alpha=1.0, prompt=uncertainty",
+  "vu_threshold": 0.065,
+  "se_threshold": 1.151292546497023,
+  "correctness_method": "substring match (approximate; paper uses LLM-judge)",
+  "metrics_before": {
+    "overall_hallucination_rate": 0.507,
+    "confident_hallucination_rate": 0.274,
+    "correctness_rate": 0.469,
+    "refusal_rate": 0.029,
+    "vu_su_disagreement_rate": 0.418,
+    "correlation_vu_se": 0.31687700748443604,
+    "vu_for_incorrect": 0.09505272656679153,
+    "vu_for_correct": 0.029392322525382042,
+    "n_total": 1000
+  },
+  "metrics_after": {
+    "overall_hallucination_rate": 0.326,
+    "confident_hallucination_rate": "N/A (VU after not available)",
+    "correctness_rate": 0.389,
+    "refusal_rate": 0.377,
+    "vu_su_disagreement_rate": "N/A (VU after not available)",
+    "correlation_vu_se": "N/A (VU after not available)",
+    "vu_for_incorrect": "N/A (VU after not available)",
+    "vu_for_correct": "N/A (VU after not available)",
+    "n_total": 1000,
+    "n_intervened": 612,
+    "n_skipped_alpha0": 388,
+    "approx_se_after_mean": 1.6496742963790894,
+    "approx_se_before_mean": 1.4846086502075195
+  },
+  "metrics_intervened_only": {
+    "n": 612,
+    "before": {
+      "overall_hallucination_rate": 0.6454248366013072,
+      "correctness_rate": 0.31862745098039214,
+      "refusal_rate": 0.042483660130718956
+    },
+    "after": {
+      "overall_hallucination_rate": 0.26143790849673204,
+      "correctness_rate": 0.2761437908496732,
+      "refusal_rate": 0.6111111111111112
+    }
+  }
+}
