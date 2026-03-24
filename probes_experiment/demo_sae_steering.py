@@ -82,7 +82,17 @@ def build_delta_vectors(layer_to_sae: dict[int, SAE]) -> dict[int, torch.Tensor]
 
 def load_questions(n: int) -> list[dict]:
     """Load n questions from test set, mixing correct and incorrect."""
-    csv_path = os.path.join(ROOT, "datasets__nq_open (6)", "Mistral-7B-Instruct-v0.3", "test.csv")
+    candidate_paths = [
+        os.path.join(ROOT, "datasets__nq_open", "Mistral-7B-Instruct-v0.3", "test.csv"),
+        os.path.join(ROOT, "datasets__nq_open", "Mistral-7B-Instruct-v0.3_sentence", "test.csv"),
+        os.path.join(ROOT, "datasets__nq_open", "sampled", "test.csv"),
+    ]
+    csv_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if csv_path is None:
+        raise FileNotFoundError(
+            "Could not find test.csv in known dataset paths:\n"
+            + "\n".join(candidate_paths)
+        )
     df = pd.read_csv(csv_path)
 
     # Pick a mix: some with low VU (model is confident), some with high VU
