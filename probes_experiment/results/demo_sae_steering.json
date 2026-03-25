@@ -1,0 +1,72 @@
+{
+  "alpha": 2.0,
+  "layers": [
+    15,
+    23
+  ],
+  "features_per_layer": {
+    "15": [
+      17678,
+      62652,
+      63959,
+      17229,
+      63890
+    ],
+    "23": [
+      54799,
+      50003,
+      28051,
+      18525,
+      22939,
+      34257,
+      3260
+    ]
+  },
+  "results": [
+    {
+      "question": "where does the optic nerve cross the midline ​",
+      "golden": "['optic chiasm']",
+      "vu_before": 0.0,
+      "se": 0.3250829733914482,
+      "baseline": "The optic nerve, also known as the optic nerve (II) in the series of 12 cranial nerves, does not cross the midline. Instead, it travels from each eye to the opposite side of the brain. This",
+      "steered": "The optic nerve does not cross the midline. Instead, each optic nerve (right and left) carries visual information from the opposite half of each eye to the brain. This occurs at the optic chiasm, a structure located just above",
+      "alpha": 2.0
+    },
+    {
+      "question": "when did starbucks become a publicly traded company",
+      "golden": "['June 1992', '1992']",
+      "vu_before": 0.0,
+      "se": 0.5004024235381879,
+      "baseline": "Starbucks Corporation became a publicly traded company on June 26, 1992, when it first listed its shares on the NASDAQ stock exchange under the ticker symbol \"SBUX.\" The initial public offering (IP",
+      "steered": "Starbucks Corporation became a publicly traded company on June 26, 1992, when it began trading on the NASDAQ stock exchange under the ticker symbol \"SBUX.\" Prior to this, the company was priv",
+      "alpha": 2.0
+    },
+    {
+      "question": "calpurnia son name in to kill a mockingbird",
+      "golden": "['Zeebo', 'James Zeebo']",
+      "vu_before": 1.0,
+      "se": 0.9404479886553264,
+      "baseline": "Calpurnia is not a character's son in \"To Kill a Mockingbird.\" Calpurnia is the housekeeper for the Finch family and a close friend of Atticus Finch. She is a significant character in the",
+      "steered": "Calpurnia is not a character's son in \"To Kill a Mockingbird.\" Calpurnia is the housekeeper for the Finch family, and she plays a significant role as a confidante and moral compass for Sc",
+      "alpha": 2.0
+    },
+    {
+      "question": "dark parables return of the salt princess release date",
+      "golden": "['September 2017']",
+      "vu_before": 1.0,
+      "se": 0.8018185525433372,
+      "baseline": "I'm sorry for any confusion, but it seems there might be a misunderstanding. \"Dark Parables: Return of the Salt Princess\" is a game, and as of my last update, it doesn't have a specific release date yet",
+      "steered": "I'm sorry for any confusion, but it seems there might be a misunderstanding. \"Dark Parables: Return of the Salt Princess\" is a game, and as of my last update, it hasn't been released yet. The release",
+      "alpha": 2.0
+    },
+    {
+      "question": "when was the day that the pubs ran dry in the poem 9-3",
+      "golden": "['31 October 1972']",
+      "vu_before": 1.0,
+      "se": 0.8979457248567797,
+      "baseline": "The poem \"9-3\" does not provide a specific date when the pubs ran dry. The poem is a narrative about a town's transformation, and the running dry of the pubs is a symbolic event that occurs during this transformation",
+      "steered": "The poem \"9-3\" does not provide a specific date for the day that the pubs ran dry. The poem is a narrative about the effects of World War I on a small town, and the day in question is likely a symbolic",
+      "alpha": 2.0
+    }
+  ]
+}
