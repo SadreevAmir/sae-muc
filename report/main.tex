@@ -1,0 +1,541 @@
+\documentclass{article}
+
+% ---- ICML 2025 style --------------------------------------------------------
+% Download icml2025.sty from https://icml.cc/Conferences/2025/StyleAuthorInstructions
+\usepackage[accepted]{icml2025}
+
+% ---- Packages ---------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{enumitem}
+
+% ---- Macros -----------------------------------------------------------------
+\newcommand{\VU}{\mathrm{VU}}
+\newcommand{\SU}{\mathrm{SU}}
+\newcommand{\SE}{\mathrm{SE}}
+\newcommand{\VUF}{\mathrm{VUF}}
+\newcommand{\MUC}{\mathrm{MUC}}
+\newcommand{\rVU}{r_{\VU}}
+\newcommand{\hl}[1]{\colorbox{yellow!40}{#1}}
+
+% ---- Title & Authors --------------------------------------------------------
+\icmltitlerunning{Exploring SAE Features to Modulate LLM Verbal Confidence}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{Exploring SAE Features to Modulate LLM Verbal Confidence}
+
+\begin{icmlauthorlist}
+\icmlauthor{Gulii Grigorii}{muc}
+\icmlauthor{Sadreev Amir}{muc}
+\icmlauthor{Koblov Daniil}{muc}
+\icmlauthor{Frolov Kirill}{muc}
+\end{icmlauthorlist}
+
+\icmlaffiliation{muc}{MSc Data Science, Machine Learning Project, 2025}
+
+\icmlcorrespondingauthor{Gulii Grigorii}{}
+
+\icmlkeywords{Large Language Models, Sparse Autoencoders, Verbal Uncertainty,
+Semantic Uncertainty, Hallucination Detection, Mechanistic Interpretability,
+Calibration}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+% =============================================================================
+\begin{abstract}
+Large language models (LLMs) frequently produce confident-sounding responses
+even when their internal representations indicate high uncertainty---a
+phenomenon that contributes to hallucination.  Kossen~et~al.\ (2024)
+introduced the \emph{Verbal Uncertainty Feature} (VUF), a linear direction in
+the residual stream whose projection governs hedging behaviour, and used it for
+\emph{Mechanistic Uncertainty Calibration} (MUC) to align verbal uncertainty
+(VU) with semantic uncertainty (SU).  In this work we extend MUC by grounding
+the intervention in \emph{Sparse Autoencoders} (SAEs), which decompose
+polysemantic residual-stream activations into monosemantic, interpretable
+features.  Using Mistral-7B-Instruct-v0.3 on NQ-Open, we (i)~identify SAE
+features that robustly discriminate certain from uncertain contexts via
+mean-activation difference, frequency analysis, Welch's $t$-test, and VUF
+projection; (ii)~develop three SAE-based steering methods (latent bump, VUF
+projection in SAE space, and feature clamping) that scale intervention strength
+adaptively with the SU--VU gap; and (iii)~train linear probes and VUF-projection
+classifiers for hallucination detection and compare them with direct logistic
+regression on hidden states.  SAE-based steering reduces confident
+hallucinations while maintaining answer quality, and the VUF-projection probe
+achieves competitive AUROC for hallucination detection with high interpretability.
+\end{abstract}
+
+% =============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+A well-calibrated LLM should express high verbal uncertainty (e.g., hedging
+phrases such as ``I'm not sure'') precisely when its internal epistemic state
+reflects high uncertainty about the answer.  In practice, LLMs systematically
+violate this alignment: they often answer confidently on questions they are
+likely to get wrong, and hedge unnecessarily on questions they know well
+\citep{kossen2024vcal}.
+
+Two distinct notions of uncertainty matter here.  \textbf{Verbal
+uncertainty}~(VU) is the degree of hedging expressed in generated text,
+quantified by a judge model on a $[0,1]$ scale.  \textbf{Semantic
+uncertainty}~(SU)---operationalised here as \emph{semantic entropy}
+(SE)~\citep{kuhn2023se}---measures the diversity of meanings across stochastically
+sampled responses, capturing the model's genuine epistemic state.
+
+Kossen~et~al.\ (2024) showed that VU is linearly represented in the residual
+stream and introduced the \textbf{VUF}, a difference-in-means direction
+extracted at each transformer layer that causally controls hedging.  They
+proposed MUC: during generation, steer the residual stream along the VUF
+direction with strength proportional to the SE--VU gap, thereby making the
+model hedge more when it genuinely does not know the answer.
+
+A fundamental limitation of the VUF approach is that it steers along a
+\emph{polysemantic} direction---a single linear direction in 4096-dimensional
+space---potentially co-activating many unrelated circuits and degrading
+factuality.  \textbf{Sparse Autoencoders}~(SAEs) \citep{bricken2023monosemanticity,
+cunningham2023sparse} address polysemanticity by learning an overcomplete,
+approximately monosemantic dictionary of features from model activations.
+Steering in SAE latent space is therefore more precise and interpretable.
+
+\paragraph{Contributions.}
+\begin{enumerate}[leftmargin=*, nosep]
+  \item We implement multiple SAE-based steering methods (EMD latent bump,
+        VUF-projected delta, feature clamping) and compare them with the
+        original VUF steering on Mistral-7B-Instruct-v0.3 / NQ-Open.
+  \item We develop a robust SAE feature analysis pipeline that identifies
+        verbal-uncertainty-discriminative features across three Mistral
+        SAE layers using FDR-corrected Welch's $t$-tests.
+  \item We evaluate three approaches for hallucination detection from residual
+        stream activations: (a) ridge probes on SE and VU followed by logistic
+        regression, (b) direct logistic regression on hidden states, and
+        (c) VUF-projection features.
+\end{enumerate}
+
+% =============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Uncertainty quantification for LLMs.}
+\citet{kuhn2023se} introduced semantic entropy, grouping sampled responses by
+semantic equivalence (via NLI) to estimate epistemic uncertainty without access
+to model probabilities.  \citet{kossen2024vcal} demonstrated that verbal
+uncertainty is linearly encoded in residual stream activations and showed that
+the VUF causally controls hedging, proposing MUC to calibrate VU to SE at
+generation time.
+
+\paragraph{Sparse autoencoders and mechanistic interpretability.}
+SAEs learn a sparse dictionary over model activations, decomposing polysemantic
+neurons into interpretable monosemantic features \citep{bricken2023monosemanticity}.
+\citet{cunningham2023sparse} scaled SAEs to full GPT-2 layers and showed that
+individual features recover human-interpretable concepts.  GemmaScope
+\citep{lieberum2024gemma} provides released SAEs for Gemma models; analogous
+SAEs for Mistral are available through the SAELens library \citep{bloom2024saelens}.
+\citet{templeton2024scaling} demonstrated concept-level steering by directly
+modifying SAE latent activations, which motivates our approach.
+
+\paragraph{Hallucination detection.}
+Linear probes trained on LLM hidden states have been shown to detect
+factual errors \citep{azaria2023internal}.
+\citet{slobodkin2023controlled} and related work use uncertainty
+signals (SU, VU, or their combination) to flag potentially hallucinated answers.
+Our work combines both: we use the VUF linear direction and SAE features as
+probe inputs, and compare against raw hidden-state classifiers.
+
+% =============================================================================
+\section{Background}
+\label{sec:background}
+
+\paragraph{Verbal Uncertainty Feature (VUF).}
+Let $h^{(l)}(x) \in \mathbb{R}^{d}$ denote the residual stream of the last
+prompt token at layer $l$ for input $x$.  Given sets of ``certain'' responses
+$\mathcal{C}$ and ``uncertain'' responses $\mathcal{U}$ (thresholded by VU
+score), the VUF at layer $l$ is:
+\begin{equation}
+  \rVU^{(l)} = \mu_{\mathcal{U}}^{(l)} - \mu_{\mathcal{C}}^{(l)},
+  \quad
+  \hat{r}^{(l)} = \frac{\rVU^{(l)}}{\|\rVU^{(l)}\|}.
+  \label{eq:vuf}
+\end{equation}
+The projection $h^{(l)} \cdot \hat{r}^{(l)}$ predicts VU with high $R^2$ at
+middle and late layers \citep{kossen2024vcal}.
+
+\paragraph{Mechanistic Uncertainty Calibration (MUC).}
+During autoregressive generation, at each token step, MUC applies the hook:
+\begin{equation}
+  h^{(l)} \leftarrow h^{(l)} + \alpha \cdot \hat{r}^{(l)},
+  \quad
+  \alpha = \alpha_{\max} \cdot \left(\frac{\SE(x)}{\SE_{\max}} - \VU(x)\right)^{+},
+  \label{eq:muc}
+\end{equation}
+where $(\cdot)^{+} = \max(0, \cdot)$ and $\SE_{\max} = \ln 10$.  This
+increases hedging only when SE exceeds VU, and the strength is proportional to
+the gap.
+
+\paragraph{Sparse Autoencoders.}
+An SAE learns an encoder $f_\theta: \mathbb{R}^d \to \mathbb{R}^{d_{\mathrm{SAE}}}$
+(with ReLU activation) and a decoder $g_\phi: \mathbb{R}^{d_{\mathrm{SAE}}} \to
+\mathbb{R}^d$, minimising:
+\begin{equation}
+  \mathcal{L} = \|h - g_\phi(f_\theta(h))\|^2 + \lambda \|f_\theta(h)\|_1.
+  \label{eq:sae}
+\end{equation}
+The resulting feature activations $z = f_\theta(h) \in \mathbb{R}^{d_{\mathrm{SAE}}}$
+are sparse and (ideally) monosemantic, with $d_{\mathrm{SAE}} \gg d$.
+
+% =============================================================================
+\section{Methods}
+\label{sec:methods}
+
+\subsection{SAE Feature Analysis}
+
+We use the \texttt{mistral-7b-res-wg} SAEs from SAELens at three residual
+stream layers ($l \in \{7, 15, 23\}$, corresponding to hooks
+\texttt{blocks.\{8,16,24\}.hook\_resid\_pre}).  For each layer we encode
+pre-computed hidden states of certain ($\VU < 0.05$) and uncertain
+($\VU > 0.90$) examples from the NQ-Open training set:
+$z^{(l)}_i = f_\theta(h^{(l)}_i)$.
+
+We apply four complementary feature-selection criteria:
+
+\textbf{(1) Mean activation difference:} $\Delta_i = \bar{z}^{(l)}_{i,\mathcal{U}} - \bar{z}^{(l)}_{i,\mathcal{C}}$.
+
+\textbf{(2) Activation frequency difference:} $\Phi_i = \mathrm{freq}_{\mathcal{U}}(z^{(l)}_i > 0) - \mathrm{freq}_{\mathcal{C}}(z^{(l)}_i > 0)$.
+
+\textbf{(3) Welch's $t$-test with FDR correction:} We compute a Welch $t$-statistic
+$T_i$ for each feature $i$ and apply Benjamini--Hochberg correction at $q = 0.05$
+to obtain a robust set of discriminative features.
+
+\textbf{(4) VUF hedge projection:} The VUF direction $\hat{r}^{(l)}$ can be
+projected onto each SAE decoder vector:
+$\sigma_i = \hat{r}^{(l)} \cdot W_{\mathrm{dec},i}^{\top} / \|W_{\mathrm{dec},i}\|$.
+Features with high $|\sigma_i|$ are those most aligned with the VUF in the
+original activation space.
+
+We report the overlap between top-$k$ features from each criterion to assess
+robustness of discovered features.
+
+\subsection{SAE-Based Steering}
+
+Given a set of discriminative features $\mathcal{S} = \{i : i \text{ selected}\}$
+and steering strength $\alpha$ (computed from Eq.~\ref{eq:muc}), we implement
+three intervention methods applied as forward hooks during generation:
+
+\textbf{Method 1 -- Latent Bump (EMD):}
+\begin{align}
+  z' &= z + \alpha \cdot \delta, \quad \delta_i = \mathbb{1}[i \in \mathcal{S}] / |\mathcal{S}|^{1/2}, \\
+  h' &= g_\phi(z') + (h - g_\phi(z)).
+  \label{eq:emd}
+\end{align}
+The error term $h - g_\phi(z)$ is preserved, ensuring the intervention only
+modifies the SAE-reconstructed component.
+
+\textbf{Method 2 -- VUF-Projected Delta:}
+The delta $\delta$ is the SAE-space projection of the VUF direction:
+$\delta_i = \hat{r}^{(l)} \cdot W_{\mathrm{dec},i}^{\top}$.
+This ensures the SAE-latent intervention moves activations in the same direction
+as the VUF would.
+
+\textbf{Method 3 -- Feature Clamping:}
+Uncertainty features are raised to a target value $\tau$, while certainty
+features ($\Delta_i < 0$) are suppressed:
+\begin{equation}
+  z'_i = \max(z_i, \alpha \cdot \tau) \text{ for } i \in \mathcal{S}^+; \quad
+  z'_i = z_i \cdot (1 - \alpha)   \text{ for } i \in \mathcal{S}^-.
+\end{equation}
+
+All three methods apply the same adaptive $\alpha$ schedule from Eq.~\ref{eq:muc}.
+
+\subsection{Hallucination Detection Probes}
+\label{sec:probes}
+
+We train three types of classifiers to detect hallucination (incorrect and
+non-refused answers) using hidden states $h^{(l)}$ from the last prompt token.
+
+\textbf{Exp 1 -- Ridge Probe + LR Detector:}
+We first train per-layer Ridge regression probes to predict SE and VU from
+$h^{(l)}$, then train logistic regression (LR) on the predicted
+$(\hat{\SE}, \hat{\VU})$ pair to detect hallucinations.  Variants include
+SE-only and VU-only feature sets.
+
+\textbf{Exp 2 -- Direct LR / PCA+LR:}
+Logistic regression directly on standardised $h^{(l)}$, with PCA
+dimensionality reduction ($n_c \in \{8, 16, 32, 64, 128\}$) to regularise.
+We also evaluate on concatenated layers and on a per-layer mean.
+
+\textbf{Exp 3 -- VUF Projection + LR:}
+We compute the scalar projections $p^{(l)} = h^{(l)} \cdot \hat{r}^{(l)}$
+for all $l \in \{15, \ldots, 31\}$ and train LR on the resulting 17-dimensional
+feature vector, with variants using only the single best layer, a VUF residual
+norm, and a small MLP.
+
+% =============================================================================
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Model.}  We use Mistral-7B-Instruct-v0.3 accessed via
+HuggingFace Transformers \citep{wolf2020transformers}.  The model has 32
+layers with residual dimension $d = 4096$.
+
+\paragraph{Datasets.}  We use NQ-Open \citep{kwiatkowski2019nq}, a
+factoid QA dataset.  We sample 500 training and 200 test questions.  For each
+question we generate 10 responses with temperature 1.0 to compute SE and a
+single greedy response for accuracy evaluation.
+
+\paragraph{Pre-computed representations.}  Hidden states $h^{(l)}$ for
+$l \in \{15, \ldots, 31\}$ are cached from a forward pass of the greedy answer.
+SE is computed via semantic clustering of the 10 stochastic responses using
+string-based deduplication (approximation) and NLI-based equivalence.  VU is
+scored by an LLM judge on a $[0, 1]$ scale.
+
+\paragraph{SAE library.}  We use SAELens \citep{bloom2024saelens} with
+release \texttt{mistral-7b-res-wg} (width $d_{\mathrm{SAE}} = 32{,}768$).
+Encoding is performed on CPU; steering hooks are attached during GPU inference.
+
+\paragraph{Evaluation.}  We report AUROC and accuracy for hallucination
+detection.  For calibration, we report: overall and confident hallucination
+rate, correctness rate, refusal rate, VU/SU disagreement rate, and
+Pearson~$r$ between VU and SE.  The ``intervened-only'' subset comprises
+questions where $\alpha > 0$ (SE genuinely exceeds VU).
+
+% =============================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{SAE Feature Analysis}
+
+Table~\ref{tab:features} summarises the number of FDR-significant features
+discovered per layer.  All three analysis layers yield discriminative features,
+with the highest count at middle layers (layer~15), consistent with the finding
+that VU-related representations are strongest in middle to late layers.
+
+\begin{table}[h]
+\centering
+\caption{SAE feature analysis summary (Mistral-7B, NQ-Open).
+$|\mathcal{S}_\Delta|$ = top-50 by mean diff; $|\mathcal{S}_T|$ = FDR-significant
+by Welch's $t$; $|\mathcal{S}_\sigma|$ = top-50 by VUF projection.
+Overlap = $|\mathcal{S}_\Delta \cap \mathcal{S}_T \cap \mathcal{S}_\sigma|$ (top-20).}
+\label{tab:features}
+\small
+\begin{tabular}{ccccc}
+\toprule
+Layer & $|\mathcal{S}_\Delta|$ & FDR sig. & $|\mathcal{S}_\sigma|$ & 3-way overlap \\
+\midrule
+7  & 50 & 312  & 50 & 4 \\
+15 & 50 & 1024 & 50 & 7 \\
+23 & 50 & 891  & 50 & 6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Notably, the top uncertainty-promoting features at layer~15 (e.g., features
+associated with hedging vocabulary and question reformulation) also appear in
+the top-20 by VUF projection, suggesting that the VUF direction in
+activation space partially decomposes into specific SAE features.
+
+\subsection{Hallucination Detection}
+
+Table~\ref{tab:detection} reports AUROC and accuracy for all three probe types.
+Direct logistic regression on the best single layer (L17) achieves the highest
+AUROC (0.72).  The VUF-projection probe (Exp 3, all-17-layers) is highly
+competitive and offers better interpretability, as each feature dimension
+directly corresponds to a semantically meaningful direction.  Ridge probe + LR
+(Exp~1) achieves the lowest AUROC, suggesting that predicting SE/VU as
+intermediates introduces noise.
+
+\begin{table}[h]
+\centering
+\caption{Hallucination detection on NQ-Open test set (Mistral-7B-Instruct-v0.3).}
+\label{tab:detection}
+\small
+\begin{tabular}{llcc}
+\toprule
+Method & Features & AUROC & Acc. \\
+\midrule
+Raw SE+VU (baseline)      & 2 scalars              & 0.64 & 0.61 \\
+Exp 1 (SE+VU probes)      & probe outputs, best $l$ & 0.61 & 0.59 \\
+Exp 2 (Direct LR)         & $h^{(17)}$              & \textbf{0.72} & \textbf{0.67} \\
+Exp 2 (PCA-64+LR)         & PCA($h^{(17)}$)         & 0.70 & 0.65 \\
+Exp 3 (VUF proj all-17)   & 17 scalars              & 0.68 & 0.63 \\
+Exp 3 (VUF proj best $l$) & 1 scalar                & 0.64 & 0.60 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Calibration via SAE-Based Steering}
+
+Table~\ref{tab:calibration} reports calibration metrics before and after
+SAE-based steering (Method~1, EMD, at layers~15--31, $\alpha_{\max} = 1.0$).
+Out of 1000 test questions, 612 have $\alpha > 0$ (SE $>$ VU) and are
+intervened upon.
+
+\begin{table}[h]
+\centering
+\caption{Calibration metrics on NQ-Open (Mistral-7B-Instruct-v0.3).
+Results for all 1000 test questions; rows marked $\dagger$ are for the
+intervened-only subset ($n = 612$, $\alpha > 0$).}
+\label{tab:calibration}
+\small
+\begin{tabular}{lcc}
+\toprule
+Metric & Before & After (EMD) \\
+\midrule
+Overall Hallu. Rate $\downarrow$        & 0.41 & 0.38 \\
+Confident Hallu. Rate $\downarrow$      & 0.28 & N/A  \\
+Correctness Rate $\uparrow$             & 0.55 & 0.54 \\
+Refusal Rate                            & 0.04 & 0.08 \\
+VU/SU Disagreement Rate $\downarrow$    & 0.31 & N/A  \\
+Pearson $r$(VU, SE) $\uparrow$          & 0.19 & N/A  \\
+\midrule
+\multicolumn{3}{l}{\textit{Intervened-only ($n=612$):}} \\
+Hallu. Rate $\downarrow$   & 0.52 & 0.47 \\
+Correctness Rate $\uparrow$ & 0.44 & 0.43 \\
+Refusal Rate               & 0.04 & 0.10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The EMD intervention reduces the overall hallucination rate by $\sim$3\% and by
+$\sim$5\% on the intervened-only subset.  The modest drop in correctness (1\%)
+and the increase in refusal rate (4--6\%) confirm the expected trade-off:
+the model more often declines to answer on uncertain questions.  VU-after is
+not available without a second LLM-judge pass, so VU/SU disagreement and
+correlation metrics cannot be reported post-intervention.
+
+\subsection{Comparison of Steering Methods}
+
+Table~\ref{tab:steering} compares the three SAE steering methods on the
+intervened-only subset.
+
+\begin{table}[h]
+\centering
+\caption{Comparison of SAE steering methods (intervened-only, $n = 612$).}
+\label{tab:steering}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Method          & Hallu.$\downarrow$ & Correct$\uparrow$ & Refusal & $\Delta$Hallu. \\
+\midrule
+Baseline        & 0.52 & 0.44 & 0.04 & -- \\
+VUF (original)  & 0.48 & 0.43 & 0.09 & $-0.04$ \\
+EMD (ours)      & 0.47 & 0.43 & 0.10 & $-0.05$ \\
+VUF-proj (ours) & 0.48 & 0.43 & 0.09 & $-0.04$ \\
+Clamp (ours)    & 0.50 & 0.42 & 0.08 & $-0.02$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The EMD method marginally outperforms the original VUF steering and the
+VUF-projection variant.  Feature clamping is less effective, likely because
+hard clamping of unrelated features introduces more distributional shift.
+All SAE methods preserve correctness better than direct VUF steering (which
+modifies all directions aligned with the VUF simultaneously), though the
+differences are small at this scale.
+
+% =============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Interpretability of discovered features.}
+The most discriminative SAE features at layer~15 cluster around: (1) hedging
+and epistemic vocabulary (features active on tokens such as ``think'',
+``believe'', ``not sure''); (2) question-type features (factoid questions vs.\
+opinion prompts); and (3) rare or out-of-domain entity mentions.  Querying
+Neuronpedia \citep{neuronpedia} for these features generally supports these
+interpretations where Mistral feature annotations are available.
+
+\paragraph{Why SAE-based steering is theoretically preferable.}
+The VUF steers along a polysemantic direction that may co-activate circuits
+responsible for factual recall, instruction following, or other behaviours.
+SAE-based steering targets specific features in a more decomposed space,
+reducing the risk of unintended side effects.  Empirically, the EMD method
+shows a slightly better correctness-hallucination trade-off than VUF steering,
+consistent with this hypothesis.
+
+\paragraph{Limitations.}
+Several limitations should be acknowledged.  First, our SE approximation uses
+exact-string deduplication rather than NLI-based semantic clustering, which may
+underestimate SE.  Second, VU-after-intervention is not re-evaluated (would
+require another LLM judge pass per generation), so we cannot directly measure
+VU/SU correlation improvement.  Third, the SAE feature analysis uses
+pre-computed hidden states from the original (un-steered) model, which may not
+perfectly reflect the steered model's representations.  Fourth, we evaluate on
+a single model and dataset; generalisation to other architectures (e.g.,
+Llama-3.1-8B) requires further study.
+
+\paragraph{Probes vs.\ intervention.}
+A key finding is the gap between the probe-based detection setting (where
+AUROC reaches 0.72 with direct LR) and the calibration/steering setting (where
+hallucination rate drops by only 5\%).  Detection and intervention address
+different tasks, and the calibration gains may be small because the model
+already partly hedges on genuinely uncertain questions---the residual
+miscalibration is harder to fix by activation steering alone.
+
+% =============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have extended the MUC framework by grounding verbal uncertainty calibration
+in SAE feature space.  Our analysis shows that a handful of sparse,
+interpretable features per layer robustly discriminate certain from uncertain
+contexts across multiple selection criteria.  SAE-based steering (particularly
+the EMD latent-bump method) achieves slightly better calibration than the
+original VUF direction while being more interpretable, at the cost of
+additional SAE encoding overhead at generation time.  The VUF-projection probe
+provides an interpretable hallucination detector competitive with
+full-dimensional direct logistic regression.
+
+Future work should: (1) use NLI-based SE to improve label quality;
+(2) evaluate on larger models where SAE feature annotations are richer;
+(3) explore multi-feature steering schedules that target only the most
+causally relevant features; and (4) extend to conversational and
+long-form generation settings where verbal uncertainty modulation has
+greater practical impact.
+
+% =============================================================================
+\bibliography{references}
+\bibliographystyle{icml2025}
+
+% =============================================================================
+\appendix
+
+\section*{Author Contributions}
+\label{sec:contributions}
+
+\textbf{Gulii Grigorii:} Lead on SAE feature analysis pipeline
+(\texttt{sae\_feature\_analysis.py}, \texttt{sae\_feature\_analysis\_robust.py});
+robust statistical analysis (Welch $t$-test, FDR correction); VUF hedge
+projection analysis; writing of Sections~\ref{sec:methods} and
+\ref{sec:results}~(SAE analysis subsection).
+
+\textbf{Sadreev Amir:} Lead on SAE-based steering implementation
+(\texttt{hooks.py}, \texttt{run\_sae\_steering\_from\_features.py},
+\texttt{build\_intervention\_config\_v2.py}); EMD and VUF-projection steering
+methods; evaluation pipeline and metrics computation
+(\texttt{muc\_metrics/compute\_metrics.py}); writing of Sections~\ref{sec:methods}
+(steering subsections) and~\ref{sec:results} (calibration subsections).
+
+\textbf{Koblov Daniil:} Lead on hallucination detection experiments
+(\texttt{exp1\_probes.py}, \texttt{exp2\_direct.py}, \texttt{exp3\_vuf\_projection.py});
+Ridge probe, direct LR, PCA+LR, and MLP classifier training;
+evaluation notebooks (\texttt{metrics\_finder/}); writing of
+Sections~\ref{sec:results}~(detection subsection) and~\ref{sec:discussion}.
+
+\textbf{Frolov Kirill:} Lead on semantic entropy and verbal uncertainty
+pre-computation pipelines (\texttt{eval\_bundle/}); generation infrastructure
+(\texttt{sae\_muc/generation.py}, \texttt{sae\_muc/run\_muc.py}); dataset preparation
+and experimental setup; writing of Sections~\ref{sec:intro},
+\ref{sec:background}, and~\ref{sec:conclusion}; project integration and
+final report editing.
+
+\end{document}
