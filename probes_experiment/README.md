@@ -31,15 +31,15 @@ probes_experiment/
 ## Быстрый старт
 
 ```bash
-cd "SAE smoking-room/probes_experiment"
+cd probes_experiment
 
 # Все эксперименты последовательно
-/opt/homebrew/bin/python3.11 exp1_probes.py
-/opt/homebrew/bin/python3.11 exp2_direct.py
-/opt/homebrew/bin/python3.11 exp3_vuf_projection.py
+python exp1_probes.py
+python exp2_direct.py
+python exp3_vuf_projection.py
 
 # Итоговая таблица
-/opt/homebrew/bin/python3.11 compare_results.py
+python compare_results.py
 ```
 
 Результаты сохраняются в `results/`, модели в `models/`.
@@ -176,4 +176,4 @@ requests         # для Neuronpedia API
 
 Установка: `pip install scikit-learn joblib pandas sae-lens requests`
 
-Python: **3.11** (`/opt/homebrew/bin/python3.11`)
+Python: **3.11+**

@@ -1,7 +1,7 @@
 """Shared paths and constants for all experiments."""
 import os
 
-# Root of the SAE smoking-room repo
+# Root of the repository
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 TRAIN_CSV      = f"{ROOT}/datasets__nq_open/Mistral-7B-Instruct-v0.3/train.csv"

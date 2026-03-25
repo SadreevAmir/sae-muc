@@ -12,8 +12,8 @@
 ## Запуск
 
 ```bash
-cd "SAE smoking-room/muc_metrics"
-/opt/homebrew/bin/python3.11 compute_metrics.py
+cd muc_metrics
+python compute_metrics.py
 # → results.json
 ```
 

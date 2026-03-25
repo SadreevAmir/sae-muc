@@ -9,7 +9,7 @@ cd /path/to/parent_of_sae_muc   # каталог, в котором лежит �
 pip install -r sae_muc/requirements.txt
 ```
 
-Либо из корня монорепо: `pip install -r requirements.txt` (там тоже есть `sae-lens`).
+Либо из корня репозитория: `pip install -r requirements.txt` (включает все зависимости).
 
 **Данные для `run_muc.py`** лежат **рядом** с `sae_muc/` (не внутри неё): каталоги `datasets/` и `detection/` в том же стиле, что у Meta (см. `--repo_root`).
 
@@ -57,10 +57,10 @@ CLI для этого нет: импортируйте из `sae_muc.inspect_del
 
 ## Colab
 
-Полная пошаговая инструкция по всем ноутбукам Colab: **[`COLAB_GUIDE.md`](../COLAB_GUIDE.md)**.
+- SAE MUC: [`colab_sae_muc.ipynb`](../notebooks/colab_sae_muc.ipynb) (чекпоинты, Drive-бэкап).
+- Песочница: [`colab_sae_playground.ipynb`](../notebooks/colab_sae_playground.ipynb).
 
-- SAE MUC: [`colab_sae_muc.ipynb`](../colab_sae_muc.ipynb) (чекпоинты, Drive-бэкап).
-- Песочница: [`colab_sae_playground.ipynb`](../colab_sae_playground.ipynb).
+Все ноутбуки находятся в папке [`notebooks/`](../notebooks/).
 
 ## Согласованность с `colab_pipeline.ipynb`
 

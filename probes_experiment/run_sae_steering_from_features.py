@@ -46,7 +46,7 @@ RUN_CONFIG = {
     "feature_value": 1.0,
     "sae_dtype": "float32",
     "device_map": "auto",
-    "output_jsonl": "/Users/amir/Downloads/out.jsonl",
+    "output_jsonl": "out.jsonl",
 }
 
 
