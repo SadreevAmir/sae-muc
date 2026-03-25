@@ -235,10 +235,10 @@ def analyze_and_build_layer(
         emd_features.append(i)
         emd_weights.append(w)
     for i in cert_idx:
-        w = float(dvals[i])  # negative Cohen's d (suppresses certainty)
-        delta_emd[i] = -w  # flip sign: we want to increase uncertainty
+        w = float(dvals[i])  # negative Cohen's d (mean_u < mean_c for these)
+        delta_emd[i] = w  # keep negative: suppress certainty features when α > 0
         emd_features.append(i)
-        emd_weights.append(-w)
+        emd_weights.append(w)
 
     # L2 normalize
     norm = delta_emd.norm()
