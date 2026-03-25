@@ -30,7 +30,11 @@ if str(_REPO_PARENT) not in sys.path:
     sys.path.insert(0, str(_REPO_PARENT))
 
 from sae_muc.generation import generate_lines_for_batch
-from sae_muc.hooks import clear_sae_latent_hooks, register_sae_latent_hooks
+from sae_muc.hooks import (
+    clear_sae_latent_hooks,
+    register_sae_latent_hooks,
+    register_sae_clamp_hooks,
+)
 from sae_muc.layer_map import hf_layers_for_release
 from sae_muc.layers_util import parse_layers_str, process_layers_to_process
 from sae_muc.prompts_mini import (
@@ -39,6 +43,9 @@ from sae_muc.prompts_mini import (
     make_sentence_user_content,
 )
 from sae_muc.vuf_hooks import clear_vuf_residual_hooks, register_vuf_residual_hooks
+
+# Steering methods that use SAE (need SAE loaded)
+_SAE_STEERING_METHODS = {"sae", "sae_emd", "sae_projected_vuf", "sae_clamp"}
 
 
 def _chat_messages_for_question(question: str, prompt_type: str) -> list[dict]:
@@ -82,6 +89,54 @@ def load_intervention(path: Path) -> tuple[str, dict[int, dict]]:
     layers: dict[int, dict] = {}
     for k, v in data["layers"].items():
         layers[int(k)] = v
+    return release, layers
+
+
+def load_intervention_v2(path: Path, method: str) -> tuple[str, dict[int, dict]]:
+    """
+    Load v2 intervention config and extract the relevant method's data.
+
+    Returns (release, layer_meta) where layer_meta[hf_layer] contains:
+      - "sae_id": str
+      - For emd/projected_vuf: "delta": Tensor[d_sae]
+      - For clamp: "clamp_config": {unc_indices, unc_targets, cert_indices}
+    """
+    data = torch.load(path, map_location="cpu")
+    release = data["release"]
+    raw_layers = data["layers"]
+
+    layers: dict[int, dict] = {}
+    for k, v in raw_layers.items():
+        hf_layer = int(k)
+        entry: dict = {"sae_id": v["sae_id"]}
+
+        if method == "sae_emd":
+            entry["delta"] = v["method_emd"]["delta"]
+        elif method == "sae_projected_vuf":
+            pvuf = v.get("method_projected_vuf")
+            if pvuf is None:
+                print(f"  Warning: layer {hf_layer} has no projected_vuf data (no hedge?), skipping")
+                continue
+            entry["delta"] = pvuf["delta"]
+        elif method == "sae_clamp":
+            clamp = v["method_clamp"]
+            unc_idx = clamp["uncertainty_features"]
+            cert_idx = clamp["certainty_features"]
+            target_vals = clamp["target_uncertain_values"]
+            entry["clamp_config"] = {
+                "unc_indices": torch.tensor(unc_idx, dtype=torch.long),
+                "unc_targets": torch.tensor(
+                    [target_vals[i] for i in unc_idx], dtype=torch.float32
+                ),
+                "cert_indices": torch.tensor(cert_idx, dtype=torch.long),
+            }
+            # Also store delta for compatibility (not used by clamp hooks)
+            entry["delta"] = torch.zeros(1)
+        else:
+            raise ValueError(f"Unknown v2 method: {method}")
+
+        layers[hf_layer] = entry
+
     return release, layers
 
 
@@ -159,6 +214,7 @@ def get_answers_muc(
     layer_to_sae: dict[int, SAE] | None,
     layer_to_delta: dict[int, torch.Tensor] | None,
     hedge_2d: torch.Tensor | None,
+    layer_to_clamp: dict[int, dict] | None = None,
     gen_batch_size: int = 16,
 ) -> None:
     print("will save to", out_file)
@@ -179,11 +235,12 @@ def get_answers_muc(
         return float(alpha_f) == 0.0 or dr == 0
 
     def _register_hooks(alpha_f: float) -> None:
-        if steering == "sae":
+        clear_vuf_residual_hooks(model)
+        clear_sae_latent_hooks(model)
+
+        if steering in ("sae", "sae_emd", "sae_projected_vuf"):
             if layer_to_sae is None or layer_to_delta is None:
-                raise RuntimeError("SAE steering requires layer_to_sae and layer_to_delta.")
-            clear_vuf_residual_hooks(model)
-            clear_sae_latent_hooks(model)
+                raise RuntimeError(f"{steering} steering requires layer_to_sae and layer_to_delta.")
             register_sae_latent_hooks(
                 model,
                 layer_to_sae,
@@ -191,11 +248,19 @@ def get_answers_muc(
                 hook_layers,
                 float(alpha_f),
             )
+        elif steering == "sae_clamp":
+            if layer_to_sae is None or layer_to_clamp is None:
+                raise RuntimeError("sae_clamp steering requires layer_to_sae and layer_to_clamp.")
+            register_sae_clamp_hooks(
+                model,
+                layer_to_sae,
+                layer_to_clamp,
+                hook_layers,
+                float(alpha_f),
+            )
         elif steering == "residual":
             if hedge_2d is None:
                 raise RuntimeError("Residual (article) steering requires hedge_2d.")
-            clear_sae_latent_hooks(model)
-            clear_vuf_residual_hooks(model)
             register_vuf_residual_hooks(
                 model,
                 hedge_2d,
@@ -298,9 +363,15 @@ def main() -> None:
     parser.add_argument(
         "--steering",
         type=str,
-        choices=("sae", "residual"),
+        choices=("sae", "sae_emd", "sae_projected_vuf", "sae_clamp", "residual"),
         default="sae",
-        help="sae: латентный bump через SAE; residual: h←h+α·r̂ из статьи (сырой остаток).",
+        help=(
+            "sae: v1 latent bump (hedge projection); "
+            "sae_emd: v2 EMD with consensus features; "
+            "sae_projected_vuf: v2 SAE-projected VUF; "
+            "sae_clamp: v2 feature clamping; "
+            "residual: h←h+α·r̂ (raw VUF from paper)."
+        ),
     )
     parser.add_argument(
         "--max_questions",
@@ -370,6 +441,8 @@ def main() -> None:
     else:
         hook_layers = process_layers
 
+    is_v2_method = args.steering in ("sae_emd", "sae_projected_vuf", "sae_clamp")
+
     results_df = pd.read_csv(root / "datasets" / dataset / model_name / f"{split}.csv")
     if args.max_questions is not None:
         n = max(0, int(args.max_questions))
@@ -403,8 +476,9 @@ def main() -> None:
     base_name = f"with_vufi_{args.iti_method}_{args.str_process_layers}_{args.max_alpha}"
     if args.prompt_type != "uncertainty":
         base_name += f"_{args.prompt_type}"
+    if args.steering != "sae":
+        base_name += f"_{args.steering}"
     if args.steering == "residual":
-        base_name += "_residual"
         base_name += "_L" + "-".join(str(l) for l in hook_layers)
     if args.max_questions is not None:
         base_name += f"_first{args.max_questions}"
@@ -426,22 +500,37 @@ def main() -> None:
 
     layer_to_sae: dict[int, SAE] | None = None
     layer_to_delta: dict[int, torch.Tensor] | None = None
+    layer_to_clamp: dict[int, dict] | None = None
     hedge_2d: torch.Tensor | None = None
 
-    if args.steering == "sae":
+    if args.steering in _SAE_STEERING_METHODS:
         inter_path = Path(args.intervention_path)
         if not inter_path.is_file():
             inter_path = root / args.intervention_path
-        release, layer_meta = load_intervention(inter_path)
-        layer_to_delta = {l: layer_meta[l]["delta"] for l in layer_meta}
+
+        if is_v2_method:
+            # v2 config from build_intervention_config_v2
+            release, layer_meta = load_intervention_v2(inter_path, args.steering)
+            if args.steering == "sae_clamp":
+                layer_to_clamp = {l: layer_meta[l]["clamp_config"] for l in layer_meta}
+                # delta not needed for clamp but load_saes_for_layers needs sae_id
+                layer_to_delta = {}
+            else:
+                layer_to_delta = {l: layer_meta[l]["delta"] for l in layer_meta}
+        else:
+            # v1 config from build_intervention_config (legacy)
+            release, layer_meta = load_intervention(inter_path)
+            layer_to_delta = {l: layer_meta[l]["delta"] for l in layer_meta}
+
         layer_to_sae = load_saes_for_layers(release, layer_meta, args.sae_dtype)
         print("repo_root", root)
+        print("steering", args.steering)
         print("process_layers", process_layers)
         print("SAE hooks on layers", [l for l in process_layers if l in layer_to_sae])
         skipped = [l for l in process_layers if l not in layer_to_sae]
         if skipped:
             print("No SAE config for HF layers (skipped):", skipped)
-    else:
+    elif args.steering == "residual":
         hp = Path(args.hedge_path) if args.hedge_path else None
         if hp is None or not hp.is_file():
             hp2 = root / args.hedge_path if args.hedge_path else None
@@ -449,16 +538,17 @@ def main() -> None:
                 hp = hp2
         if hp is None or not hp.is_file():
             raise FileNotFoundError(
-                "Для --steering residual укажите существующий --hedge_path "
-                "(например calibration/.../Hs_hedge_universal.pt)."
+                "For --steering residual, provide a valid --hedge_path "
+                "(e.g. calibration/.../Hs_hedge_universal.pt)."
             )
         hedge_2d = torch.load(hp, map_location="cpu")
         if hedge_2d.ndim != 2:
-            raise ValueError(f"Hs_hedge ожидается [n_layers, d_model], получено {tuple(hedge_2d.shape)}")
+            raise ValueError(f"Hs_hedge expected [n_layers, d_model], got {tuple(hedge_2d.shape)}")
         print("repo_root", root)
-        print("str_process_layers (маска α/детекции как в SAE-прогоне):", process_layers)
-        print("residual hook_layers (куда вешается h←h+α·r̂):", hook_layers)
+        print("residual hook_layers:", hook_layers)
         print("residual steering hedge from", hp)
+    else:
+        raise ValueError(f"Unknown steering: {args.steering}")
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -484,6 +574,7 @@ def main() -> None:
         layer_to_sae,
         layer_to_delta,
         hedge_2d,
+        layer_to_clamp=layer_to_clamp,
         gen_batch_size=args.gen_batch_size,
     )
     os.environ["RUN_MUC_LAST_JSONL"] = str(Path(out_file).resolve())
