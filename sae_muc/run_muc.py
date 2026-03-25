@@ -217,6 +217,7 @@ def get_answers_muc(
     layer_to_clamp: dict[int, dict] | None = None,
     gen_batch_size: int = 16,
     apply_during_generation: bool = True,
+    greedy_only: bool = False,
 ) -> None:
     print("will save to", out_file)
 
@@ -319,7 +320,8 @@ def get_answers_muc(
                 batch_q = questions[i:chunk_end]
                 batch_m = [_chat_messages_for_question(q, prompt_type) for q in batch_q]
                 lines = generate_lines_for_batch(
-                    model, tokenizer, batch_q, batch_m, float(a0)
+                    model, tokenizer, batch_q, batch_m, float(a0),
+                    greedy_only=greedy_only,
                 )
                 with jsonlines.open(out_file, "a") as writer:
                     for line in lines:
@@ -417,6 +419,15 @@ def main() -> None:
         help=(
             "Apply steering hooks during autoregressive generation steps "
             "(seq_len=1), not only during prefill. Default: True."
+        ),
+    )
+    parser.add_argument(
+        "--greedy_only",
+        action="store_true",
+        default=False,
+        help=(
+            "Only generate the greedy (most_likely) answer. "
+            "Skips the 10 sampled responses — much faster."
         ),
     )
     parser.add_argument(
@@ -590,6 +601,7 @@ def main() -> None:
         layer_to_clamp=layer_to_clamp,
         gen_batch_size=args.gen_batch_size,
         apply_during_generation=args.apply_during_generation,
+        greedy_only=args.greedy_only,
     )
     os.environ["RUN_MUC_LAST_JSONL"] = str(Path(out_file).resolve())
     print("RUN_MUC_LAST_JSONL", os.environ["RUN_MUC_LAST_JSONL"], flush=True)

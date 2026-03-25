@@ -13,8 +13,12 @@ def generate_lines_for_batch(
     batch_questions: list,
     batch_messages: list,
     alpha: float,
+    greedy_only: bool = False,
 ) -> list[dict]:
-    """Один forward-батч (одинаковый alpha для хуков). Возвращает строки jsonl без записи на диск."""
+    """Один forward-батч (одинаковый alpha для хуков). Возвращает строки jsonl без записи на диск.
+
+    greedy_only: if True, skip the 10 sampled responses (much faster).
+    """
     inputs = tokenizer.apply_chat_template(
         batch_messages,
         tokenize=True,
@@ -26,13 +30,29 @@ def generate_lines_for_batch(
     ).to(model.device)
 
     n = len(batch_questions)
-    n_samples = _NUM_SAMPLE_RESPONSES
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=100,
             do_sample=False,
         )
+    decoded_answers = tokenizer.batch_decode(
+        outputs[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
+    )
+
+    if greedy_only:
+        return [
+            {
+                "alpha": alpha,
+                "question": batch_questions[j],
+                "most_likely_answer": decoded_answers[j],
+                "responses": [],
+            }
+            for j in range(n)
+        ]
+
+    n_samples = _NUM_SAMPLE_RESPONSES
+    with torch.no_grad():
         outputs_responses = model.generate(
             **inputs,
             max_new_tokens=100,
@@ -40,9 +60,6 @@ def generate_lines_for_batch(
             temperature=1,
             num_return_sequences=n_samples,
         )
-    decoded_answers = tokenizer.batch_decode(
-        outputs[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
-    )
     decoded_responses = tokenizer.batch_decode(
         outputs_responses[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
     )
@@ -60,7 +77,7 @@ def generate_lines_for_batch(
     return lines
 
 
-def generate_all_responses(model, tokenizer, all_questions, all_message, alpha, out_file, batch_size):
+def generate_all_responses(model, tokenizer, all_questions, all_message, alpha, out_file, batch_size, greedy_only: bool = False):
     for i in tqdm(
         range(0, len(all_message), batch_size),
         total=max(1, (len(all_message) + batch_size - 1) // batch_size),
@@ -68,7 +85,8 @@ def generate_all_responses(model, tokenizer, all_questions, all_message, alpha, 
         batch_message = all_message[i : i + batch_size]
         batch_question = all_questions[i : i + batch_size]
         for line in generate_lines_for_batch(
-            model, tokenizer, batch_question, batch_message, alpha
+            model, tokenizer, batch_question, batch_message, alpha,
+            greedy_only=greedy_only,
         ):
             with jsonlines.open(out_file, "a") as writer:
                 writer.write(line)
