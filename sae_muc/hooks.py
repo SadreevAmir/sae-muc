@@ -163,10 +163,15 @@ def register_sae_latent_hooks(
     layer_to_delta: dict[int, torch.Tensor],
     process_layers: list[int],
     alpha: float,
+    apply_during_generation: bool = True,
 ) -> None:
     """
     Register EMD / projected_vuf hooks (methods 1 & 2).
     delta per layer is a [d_sae] tensor (direction in feature space).
+
+    apply_during_generation: if True, the hook fires on every forward pass
+        (including single-token autoregressive steps). If False, it only
+        fires during prefill (seq_len > 1).
     """
     _clear_and_init(model)
 
@@ -177,10 +182,13 @@ def register_sae_latent_hooks(
         delta = layer_to_delta[l]
         _ensure_sae_on_device(sae, model.model.layers[l])
 
-        def make_hook(sae_ref=sae, delta_ref=delta, alpha_val=alpha):
+        def make_hook(sae_ref=sae, delta_ref=delta, alpha_val=alpha,
+                      gen=apply_during_generation):
             def hook_fn(module, inputs, outputs):
                 return _apply_hook_to_outputs(
-                    outputs, lambda h: _apply_sae_latent_bump(h, sae_ref, delta_ref, alpha_val)
+                    outputs,
+                    lambda h: _apply_sae_latent_bump(h, sae_ref, delta_ref, alpha_val),
+                    apply_during_generation=gen,
                 )
             return hook_fn
 
@@ -194,10 +202,15 @@ def register_sae_clamp_hooks(
     layer_to_clamp: dict[int, dict],
     process_layers: list[int],
     alpha: float,
+    apply_during_generation: bool = True,
 ) -> None:
     """
     Register feature clamping hooks (method 3).
     clamp_config per layer has unc_indices, unc_targets, cert_indices.
+
+    apply_during_generation: if True, the hook fires on every forward pass
+        (including single-token autoregressive steps). If False, it only
+        fires during prefill (seq_len > 1).
     """
     _clear_and_init(model)
 
@@ -208,10 +221,13 @@ def register_sae_clamp_hooks(
         clamp_cfg = layer_to_clamp[l]
         _ensure_sae_on_device(sae, model.model.layers[l])
 
-        def make_hook(sae_ref=sae, cfg_ref=clamp_cfg, alpha_val=alpha):
+        def make_hook(sae_ref=sae, cfg_ref=clamp_cfg, alpha_val=alpha,
+                      gen=apply_during_generation):
             def hook_fn(module, inputs, outputs):
                 return _apply_hook_to_outputs(
-                    outputs, lambda h: _apply_sae_clamp(h, sae_ref, cfg_ref, alpha_val)
+                    outputs,
+                    lambda h: _apply_sae_clamp(h, sae_ref, cfg_ref, alpha_val),
+                    apply_during_generation=gen,
                 )
             return hook_fn
 
@@ -237,10 +253,15 @@ def _ensure_sae_on_device(sae: SAE, layer_mod: torch.nn.Module) -> None:
         sae.to(device=device)
 
 
-def _apply_hook_to_outputs(outputs, transform_fn):
-    """Apply transform_fn to the hidden state tensor in layer outputs."""
+def _apply_hook_to_outputs(outputs, transform_fn, *, apply_during_generation: bool = True):
+    """Apply transform_fn to the hidden state tensor in layer outputs.
+
+    When apply_during_generation is False, single-token steps (seq_len <= 1,
+    i.e. autoregressive decoding) are skipped — the hook only fires during
+    prefill.  When True (default), the hook fires on every forward pass.
+    """
     if torch.is_tensor(outputs):
-        if outputs.shape[1] <= 1:
+        if not apply_during_generation and outputs.shape[1] <= 1:
             return outputs
         return transform_fn(outputs)
     if not isinstance(outputs, tuple):
@@ -249,7 +270,7 @@ def _apply_hook_to_outputs(outputs, transform_fn):
             "expected Tensor or tuple."
         )
     h = outputs[0]
-    if h.shape[1] <= 1:
+    if not apply_during_generation and h.shape[1] <= 1:
         return outputs
     h2 = transform_fn(h)
     return (h2,) + outputs[1:]

@@ -84,7 +84,7 @@ def load_detection_res(root: Path, dataset: str, model_name: str, split: str) ->
 
 
 def load_intervention(path: Path) -> tuple[str, dict[int, dict]]:
-    data = torch.load(path, map_location="cpu")
+    data = torch.load(path, map_location="cpu", weights_only=False)
     release = data["release"]
     layers: dict[int, dict] = {}
     for k, v in data["layers"].items():
@@ -101,7 +101,7 @@ def load_intervention_v2(path: Path, method: str) -> tuple[str, dict[int, dict]]
       - For emd/projected_vuf: "delta": Tensor[d_sae]
       - For clamp: "clamp_config": {unc_indices, unc_targets, cert_indices}
     """
-    data = torch.load(path, map_location="cpu")
+    data = torch.load(path, map_location="cpu", weights_only=False)
     release = data["release"]
     raw_layers = data["layers"]
 
@@ -216,6 +216,7 @@ def get_answers_muc(
     hedge_2d: torch.Tensor | None,
     layer_to_clamp: dict[int, dict] | None = None,
     gen_batch_size: int = 16,
+    apply_during_generation: bool = True,
 ) -> None:
     print("will save to", out_file)
 
@@ -247,6 +248,7 @@ def get_answers_muc(
                 layer_to_delta,
                 hook_layers,
                 float(alpha_f),
+                apply_during_generation=apply_during_generation,
             )
         elif steering == "sae_clamp":
             if layer_to_sae is None or layer_to_clamp is None:
@@ -257,6 +259,7 @@ def get_answers_muc(
                 layer_to_clamp,
                 hook_layers,
                 float(alpha_f),
+                apply_during_generation=apply_during_generation,
             )
         elif steering == "residual":
             if hedge_2d is None:
@@ -266,6 +269,7 @@ def get_answers_muc(
                 hedge_2d,
                 hook_layers,
                 float(alpha_f),
+                apply_during_generation=apply_during_generation,
             )
         else:
             raise ValueError(f"Unknown steering: {steering}")
@@ -407,6 +411,15 @@ def main() -> None:
     )
     parser.add_argument("--sae_dtype", type=str, default="float32")
     parser.add_argument(
+        "--apply_during_generation",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Apply steering hooks during autoregressive generation steps "
+            "(seq_len=1), not only during prefill. Default: True."
+        ),
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default=None,
@@ -541,7 +554,7 @@ def main() -> None:
                 "For --steering residual, provide a valid --hedge_path "
                 "(e.g. calibration/.../Hs_hedge_universal.pt)."
             )
-        hedge_2d = torch.load(hp, map_location="cpu")
+        hedge_2d = torch.load(hp, map_location="cpu", weights_only=False)
         if hedge_2d.ndim != 2:
             raise ValueError(f"Hs_hedge expected [n_layers, d_model], got {tuple(hedge_2d.shape)}")
         print("repo_root", root)
@@ -576,6 +589,7 @@ def main() -> None:
         hedge_2d,
         layer_to_clamp=layer_to_clamp,
         gen_batch_size=args.gen_batch_size,
+        apply_during_generation=args.apply_during_generation,
     )
     os.environ["RUN_MUC_LAST_JSONL"] = str(Path(out_file).resolve())
     print("RUN_MUC_LAST_JSONL", os.environ["RUN_MUC_LAST_JSONL"], flush=True)

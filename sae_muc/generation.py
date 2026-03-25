@@ -32,7 +32,6 @@ def generate_lines_for_batch(
             **inputs,
             max_new_tokens=100,
             do_sample=False,
-            temperature=0.1,
         )
         outputs_responses = model.generate(
             **inputs,

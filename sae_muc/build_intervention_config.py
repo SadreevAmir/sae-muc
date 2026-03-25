@@ -58,7 +58,7 @@ def main() -> None:
     p.add_argument("--sae_dtype", type=str, default="float32", choices=("float32", "float16", "bfloat16"))
     args = p.parse_args()
 
-    hedge = torch.load(args.hedge_path, map_location="cpu")
+    hedge = torch.load(args.hedge_path, map_location="cpu", weights_only=False)
     if hedge.ndim != 2:
         raise ValueError(f"Expected Hs_hedge [n_layers, d_model], got {tuple(hedge.shape)}")
 

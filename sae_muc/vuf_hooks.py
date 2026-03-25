@@ -21,9 +21,14 @@ def register_vuf_residual_hooks(
     hedge_2d: torch.Tensor,
     process_layers: list[int],
     alpha: float,
+    apply_during_generation: bool = True,
 ) -> None:
     """
     hedge_2d: [n_layers, d_model] на CPU; для слоя l берётся строка hedge_2d[l], L2-нормируется.
+
+    apply_during_generation: if True, the hook fires on every forward pass
+        (including single-token autoregressive steps). If False, it only
+        fires during prefill (seq_len > 1).
     """
     if hedge_2d.ndim != 2:
         raise ValueError(f"Expected Hs_hedge [n_layers, d_model], got {tuple(hedge_2d.shape)}")
@@ -42,17 +47,17 @@ def register_vuf_residual_hooks(
         h_vec = h.to(device=dev, dtype=dt)
         alpha_f = float(alpha)
 
-        def make_hook(h_ref, a_f: float):
+        def make_hook(h_ref, a_f: float, gen=apply_during_generation):
             def hook_fn(module, inputs, outputs):
                 if torch.is_tensor(outputs):
                     h_out = outputs
-                    if h_out.shape[1] > 1:
+                    if gen or h_out.shape[1] > 1:
                         h_out = h_out + h_ref * a_f
                     return h_out
                 if not isinstance(outputs, tuple):
                     raise TypeError(f"Unexpected layer output {type(outputs)}")
                 o0 = outputs[0]
-                if o0.shape[1] > 1:
+                if gen or o0.shape[1] > 1:
                     o0 = o0 + h_ref * a_f
                 return (o0,) + outputs[1:]
 

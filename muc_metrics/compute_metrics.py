@@ -24,15 +24,23 @@ import pandas as pd
 from scipy.stats import pearsonr
 
 BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DATA_ROOT = os.environ.get("MUC_DATA_ROOT", os.path.join(BASE, "vuf_checkpoint"))
 
 PATHS = dict(
-    golden_csv  = f"{BASE}/vuf_checkpoint/datasets/nq_open/Mistral-7B-Instruct-v0.3/test.csv",
-    muc_jsonl   = f"{BASE}/vuf_checkpoint/calibration/outputs/nq_open/Mistral-7B-Instruct-v0.3/uncertainty/test/with_vufi_2_range(15,32)_1.0.jsonl",
-    base_jsonl  = f"{BASE}/vuf_checkpoint/sem_uncertainty/test_0.1.jsonl",
-    base_acc    = f"{BASE}/vuf_checkpoint/sem_uncertainty/test_most_likely_acc.json",
-    base_refusal= f"{BASE}/vuf_checkpoint/sem_uncertainty/test_refusal_rate.json",
-    vu_judge    = f"{BASE}/vuf_checkpoint/verbal_uncertainty/Mistral-7B-Instruct-v0.3_nq_open_test_uncertainty_1.0_vu-llm-judge.json",
-    detection   = f"{BASE}/vuf_checkpoint/detection/LR_outputs/nq_open/Mistral-7B-Instruct-v0.3/test_verbal_uncertainty_sentence_semantic_entropy.json",
+    golden_csv  = os.environ.get("MUC_GOLDEN_CSV",
+                    f"{DATA_ROOT}/datasets/nq_open/Mistral-7B-Instruct-v0.3/test.csv"),
+    muc_jsonl   = os.environ.get("MUC_MUC_JSONL",
+                    f"{DATA_ROOT}/calibration/outputs/nq_open/Mistral-7B-Instruct-v0.3/uncertainty/test/with_vufi_2_range(15,32)_1.0.jsonl"),
+    base_jsonl  = os.environ.get("MUC_BASE_JSONL",
+                    f"{DATA_ROOT}/sem_uncertainty/test_0.1.jsonl"),
+    base_acc    = os.environ.get("MUC_BASE_ACC",
+                    f"{DATA_ROOT}/sem_uncertainty/test_most_likely_acc.json"),
+    base_refusal= os.environ.get("MUC_BASE_REFUSAL",
+                    f"{DATA_ROOT}/sem_uncertainty/test_refusal_rate.json"),
+    vu_judge    = os.environ.get("MUC_VU_JUDGE",
+                    f"{DATA_ROOT}/verbal_uncertainty/Mistral-7B-Instruct-v0.3_nq_open_test_uncertainty_1.0_vu-llm-judge.json"),
+    detection   = os.environ.get("MUC_DETECTION",
+                    f"{DATA_ROOT}/detection/LR_outputs/nq_open/Mistral-7B-Instruct-v0.3/test_verbal_uncertainty_sentence_semantic_entropy.json"),
 )
 
 # ── Refusal patterns ──────────────────────────────────────────────────────────
