@@ -7,3 +7,8 @@ __pycache__/
 
 sae_muc/artifacts/*
 !sae_muc/artifacts/.gitkeep
+
+.env
+
+metrics_finder/**
+!metrics_finder/*.ipynb
