@@ -91,28 +91,7 @@ All notebooks are in the [`notebooks/`](notebooks/) folder:
 | `colab_intervention_layers_15_23.ipynb` | Intervention on layers 15 & 23 |
 | `colab_run_eval_metrics.ipynb` | Evaluation metrics computation |
 | `colab_uncertainty_prompt_t01.ipynb` | Uncertainty prompt generation |
-
-## Results Summary
-
-**Hallucination detection** (probes, Table 2 reproduction):
-
-| Approach | AUROC | Requires |
-|----------|-------|----------|
-| Raw SE+VU → LR | **0.777** | 10 samples + LLM-judge |
-| Probe SE+VU → LR | **0.734** | only prefill |
-| PCA(32)+LR on hs | 0.724 | only prefill |
-| VUF proj+resid L17 | 0.700 | only prefill, interpretable |
-
-**MUC intervention** (Table 3 reproduction):
-
-| Metric | Before | After | Δ |
-|--------|--------|-------|---|
-| Hallucination Rate ↓ | 0.507 | **0.326** | −0.181 |
-| Correctness Rate ↑ | 0.469 | 0.389 | −0.080 |
-| Refusal Rate | 0.029 | 0.377 | +0.348 |
-
-See [probes_experiment/README.md](probes_experiment/README.md) and
-[muc_metrics/README.md](muc_metrics/README.md) for full results.
+| `colab_pipeline.ipynb` | Full paper reproduction pipeline (phases 1–7) |
 
 ## References
 
