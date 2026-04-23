@@ -53,6 +53,7 @@ def fake_cfg(tmp_path) -> ExperimentConfig:
             "model": {"provider": "fake", "name": "fake-7b"},
             "dataset": {"name": "nq_open", "split": "validation", "n_samples": 5},
             "judge": {"provider": "fake", "model": "fake-judge"},
+            "nli": {"provider": "fake", "model": "fake-nli"},
             "data_root": str(tmp_path / "data"),
             "stages": {
                 "generate": {"n_samples": 3, "max_new_tokens": 16},
