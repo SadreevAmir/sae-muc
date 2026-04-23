@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.ipynb_checkpoints/
+
+# Large model/data artifacts — download separately, not tracked in git
+*.pt
+*.pkl
+*.npy
+*.pickle
+*.h5
+
+sae_muc/artifacts/*
+!sae_muc/artifacts/.gitkeep
+
+# Data directories (too large for git)
+datasets__nq_open/
+nq_open/
+verbal_uncertainty__outputs/
+calibration__outputs/
+
+# Environment / secrets
+.env
+
+# metrics_finder data (only notebooks tracked)
+metrics_finder/**
+!metrics_finder/*.ipynb
