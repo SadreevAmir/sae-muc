@@ -20,6 +20,7 @@ dependencies = [
     "openai>=1.30",
     "python-dotenv>=1.0",
     "typer>=0.12",
+    "datasets>=2.19",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +30,6 @@ dev = [
     "ruff>=0.5",
 ]
 sae = ["sae-lens>=6.0"]
-datasets = ["datasets>=2.19"]
 
 [project.scripts]
 sae-muc = "sae_muc.cli:app"

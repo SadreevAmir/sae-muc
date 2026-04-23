@@ -19,8 +19,9 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 
-# Pipeline artifacts (big, live on server)
-data/
+# Pipeline artifacts (big, live on server) — anchored to repo root only,
+# so that `src/sae_muc/data/` (the dataset loaders package) stays tracked.
+/data/
 *.pt
 *.pkl
 *.npy
