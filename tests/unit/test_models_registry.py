@@ -12,7 +12,8 @@ def test_build_fake():
     assert backend.name == "fake-7b"
 
 
-def test_build_hf_local_stub():
+def test_build_hf_local_is_lazy():
+    # __init__ must be cheap (no model download / tokeniser load).
     backend = build_llm_backend(provider="hf_local", model="mistral-7b", dtype="bfloat16")
     assert isinstance(backend, HFLocalBackend)
     assert backend.name == "mistral-7b"

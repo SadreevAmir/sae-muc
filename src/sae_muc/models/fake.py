@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import random
+from typing import TYPE_CHECKING
 
 from sae_muc.models.base import Generation
+
+if TYPE_CHECKING:
+    import torch
 
 
 _CANNED = [
@@ -26,6 +30,11 @@ _CANNED = [
 
 
 class FakeBackend:
+    # `d_model` and `n_layers` are fake — small enough for tests but
+    # structurally what the real pipeline expects from hidden_states().
+    _D_MODEL = 8
+    _N_LAYERS = 4
+
     def __init__(self, name: str = "fake") -> None:
         self.name = name
 
@@ -47,4 +56,31 @@ class FakeBackend:
                 rng = random.Random(int(digest[:16], 16))
                 per_prompt.append(Generation(text=rng.choice(_CANNED), finish_reason="stop"))
             out.append(per_prompt)
+        return out
+
+    # --- stand-ins for HFLocalBackend so the full pipeline runs on fakes ---
+
+    def tokenize_length(self, text: str, *, add_special_tokens: bool = True) -> int:
+        _ = add_special_tokens
+        # Whitespace word count — good enough for tests; not a real tokeniser.
+        return max(1, len(text.split()))
+
+    def hidden_states(self, texts: list[str]) -> list["torch.Tensor"]:
+        """Deterministic synthetic hidden states: [n_layers+1, seq_len, d_model]."""
+        import torch
+
+        out: list[torch.Tensor] = []
+        for text in texts:
+            n_tokens = self.tokenize_length(text)
+            digest = hashlib.sha256(text.encode()).digest()[:4]
+            seed = int.from_bytes(digest, "big")
+            gen = torch.Generator().manual_seed(seed)
+            out.append(
+                torch.randn(
+                    self._N_LAYERS + 1,
+                    n_tokens,
+                    self._D_MODEL,
+                    generator=gen,
+                )
+            )
         return out
