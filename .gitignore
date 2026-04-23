@@ -31,3 +31,6 @@ data/
 # Reference materials kept local only
 Calibrating_Verbal_Uncertainty_as_a_Linear_Feature_to_Reduce_Hallucinations.pdf
 project_report (1)/
+
+# Per-developer instructions for Claude Code (kept local)
+CLAUDE.md
