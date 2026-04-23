@@ -1,11 +1,8 @@
-"""Command-line entry point for the sae-muc pipeline.
-
-Real stages are added as the pipeline is implemented. For now this is a
-minimal stub so that `sae-muc --help` works and scaffolding imports resolve.
-"""
+"""Command-line entry point for the sae-muc pipeline."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import typer
@@ -17,6 +14,10 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 @app.callback()
 def _bootstrap() -> None:
     """Load .env from the current working directory before any command runs."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     env_path = Path.cwd() / ".env"
     if env_path.exists():
         load_dotenv(env_path)
@@ -28,6 +29,38 @@ def version() -> None:
     from sae_muc import __version__
 
     typer.echo(__version__)
+
+
+@app.command()
+def run(
+    config: Path = typer.Option(..., "--config", "-c", exists=True, help="Path to experiment YAML."),
+    stage: str = typer.Option(
+        "all", "--stage", "-s", help="Stage name or 'all' for the full pipeline."
+    ),
+    run_id: str | None = typer.Option(
+        None, "--run-id", help="Reuse an existing run_id (resume into an existing directory)."
+    ),
+    force_all: bool = typer.Option(
+        False, "--force-all", help="Ignore stage manifests; recompute every stage."
+    ),
+) -> None:
+    """Run one or all pipeline stages for the given experiment config."""
+    from sae_muc.config import load_experiment_config
+    from sae_muc.pipeline import STAGES, build_context, run_all, run_stage
+
+    cfg = load_experiment_config(config)
+    rid, ctx = build_context(cfg, run_id=run_id)
+    typer.echo(f"run_id: {rid}")
+    typer.echo(f"run_dir: {ctx.store.run_dir}")
+
+    if stage == "all":
+        run_all(ctx, force_all=force_all)
+    else:
+        if stage not in STAGES:
+            raise typer.BadParameter(
+                f"Unknown stage {stage!r}. Known: {sorted(STAGES)}"
+            )
+        run_stage(ctx, stage, force=force_all)
 
 
 if __name__ == "__main__":
