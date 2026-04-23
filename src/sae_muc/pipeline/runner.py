@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable, Iterable
 
 from sae_muc.artifacts import StageManifest
-from sae_muc.pipeline import generate, prepare
+from sae_muc.pipeline import generate, judge, prepare
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -17,7 +17,8 @@ StageFn = Callable[[PipelineContext], list[str]]
 STAGES: dict[str, StageFn] = {
     "prepare": prepare.run,
     "generate": generate.run,
-    # judge / semantic_entropy / hidden_states / vuf / detect / intervene / evaluate
+    "judge": judge.run,
+    # semantic_entropy / hidden_states / vuf / detect / intervene / evaluate
     # land in upcoming commits.
 }
 
