@@ -148,7 +148,7 @@ def test_intervene_auto_layer_picks_middle(fake_ctx):
     assert (meta["layer"] == 2).all()  # 4 layers → middle index 2
 
 
-def test_intervene_rejects_unimplemented_sae_methods(fake_ctx):
+def test_intervene_sae_emd_requires_sae_features_artefact(fake_ctx):
     prepare.run(fake_ctx)
     generate.run(fake_ctx)
     hidden_states.run(fake_ctx)
@@ -159,15 +159,98 @@ def test_intervene_rejects_unimplemented_sae_methods(fake_ctx):
                 "stages": fake_ctx.cfg.stages.model_copy(
                     update={
                         "intervene": fake_ctx.cfg.stages.intervene.model_copy(
-                            update={"method": method},
+                            update={"method": method, "alpha_grid": [0.5], "layer": 1},
                         ),
                     }
                 )
             }
         )
         object.__setattr__(fake_ctx, "cfg", new_cfg)
-        with pytest.raises(NotImplementedError, match=method):
+        # No sae_features/stats.parquet seeded → pandas can't load it.
+        with pytest.raises((ValueError, FileNotFoundError)):
             intervene.run(fake_ctx)
+
+
+def _seed_sae_features(fake_ctx, *, d_latent: int = 16, k_top: int = 3) -> None:
+    """Fake `sae_features/stats.parquet`: first k_top features uncertainty,
+    last k_top features certainty, rest empty."""
+    rows = []
+    for i in range(d_latent):
+        if i < k_top:
+            sel = "uncertainty"
+        elif i >= d_latent - k_top:
+            sel = "certainty"
+        else:
+            sel = ""
+        rows.append(
+            {
+                "feature_id": i,
+                "layer": 1,
+                "cohen_d": 0.5 if sel == "uncertainty" else (-0.5 if sel == "certainty" else 0.0),
+                "mean_uncertain": 0.0,
+                "mean_certain": 0.0,
+                "selected_as": sel,
+            }
+        )
+    fake_ctx.store.save_parquet("sae_features/stats.parquet", pd.DataFrame(rows))
+
+
+def test_intervene_sae_emd_runs_with_selected_features(fake_ctx):
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, d_model=8)
+    _seed_sae_features(fake_ctx, d_latent=16, k_top=3)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={
+                            "method": "sae_emd",
+                            "alpha_grid": [-0.5, 0.0, 0.5],
+                            "layer": 1,
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    outputs = intervene.run(fake_ctx)
+    for alpha in (-0.5, 0.0, 0.5):
+        assert f"intervention/alpha_{alpha:+.2f}/generations.parquet" in outputs
+
+
+def test_intervene_sae_clamp_runs_with_selected_features(fake_ctx):
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, d_model=8)
+    _seed_sae_features(fake_ctx, d_latent=16, k_top=3)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={
+                            "method": "sae_clamp",
+                            "alpha_grid": [1.0],
+                            "layer": 1,
+                            "sae_clamp_target": 5.0,
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    outputs = intervene.run(fake_ctx)
+    assert "intervention/alpha_+1.00/generations.parquet" in outputs
 
 
 def test_intervene_sae_projected_runs_end_to_end(fake_ctx):

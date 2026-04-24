@@ -67,6 +67,9 @@ class InterveneStage(_Frozen):
     alpha_grid: list[float] = Field(default_factory=lambda: [-1.0, -0.5, 0.0, 0.5, 1.0])
     alpha_max: float = 1.0
     layer: int | Literal["auto"] = "auto"
+    # sae_clamp only: target activation value for selected uncertainty
+    # features (certainty features are clamped to 0). α multiplies this.
+    sae_clamp_target: float = 10.0
 
 
 class DetectStage(_Frozen):

@@ -95,18 +95,102 @@ def _build_sae_projected_hook(direction: "torch.Tensor", sae, alpha: float):
     return hook_fn
 
 
-def _build_hook_dispatch(method: str, direction: "torch.Tensor", alpha: float, sae):
+def _build_sae_emd_hook(uncertainty_idx, certainty_idx, sae, alpha):
+    """`sae_emd`: f' = f + α·δ, h' = decode(f') + err.
+
+    δ is a multi-hot vector: +1 at each uncertainty feature, -1 at each
+    certainty feature. α scales the whole shift, so α>0 increases
+    uncertainty-feature activations and decreases certainty ones.
+    """
+    import torch
+
+    delta = torch.zeros(sae.d_latent, dtype=torch.float32)
+    for idx in uncertainty_idx:
+        delta[idx] = 1.0
+    for idx in certainty_idx:
+        delta[idx] = -1.0
+
+    def hook_fn(residual: "torch.Tensor") -> "torch.Tensor":
+        orig_shape = residual.shape
+        orig_dtype = residual.dtype
+        flat = residual.reshape(-1, orig_shape[-1]).to(dtype=torch.float32)
+        f = sae.encode(flat)
+        recon = sae.decode(f)
+        err = flat - recon
+        f_new = f + alpha * delta.to(f.device, dtype=f.dtype)
+        out = sae.decode(f_new) + err
+        return out.to(dtype=orig_dtype).reshape(orig_shape)
+
+    return hook_fn
+
+
+def _build_sae_clamp_hook(uncertainty_idx, certainty_idx, sae, alpha, target):
+    """`sae_clamp`: set uncertainty features to α·target, certainty features to 0.
+
+    Unlike sae_emd, clamp overwrites rather than adds: the selected
+    uncertainty features are forced high, the certainty ones are
+    suppressed. α modulates the target level; target is an absolute
+    activation scale from `cfg.stages.intervene.sae_clamp_target`.
+    """
+    import torch
+
+    def hook_fn(residual: "torch.Tensor") -> "torch.Tensor":
+        orig_shape = residual.shape
+        orig_dtype = residual.dtype
+        flat = residual.reshape(-1, orig_shape[-1]).to(dtype=torch.float32)
+        f = sae.encode(flat)
+        recon = sae.decode(f)
+        err = flat - recon
+        f_new = f.clone()
+        scaled_target = alpha * float(target)
+        for idx in uncertainty_idx:
+            f_new[..., idx] = scaled_target
+        for idx in certainty_idx:
+            f_new[..., idx] = 0.0
+        out = sae.decode(f_new) + err
+        return out.to(dtype=orig_dtype).reshape(orig_shape)
+
+    return hook_fn
+
+
+def _build_hook_dispatch(
+    method: str,
+    direction: "torch.Tensor",
+    alpha: float,
+    sae,
+    *,
+    uncertainty_idx=None,
+    certainty_idx=None,
+    clamp_target: float = 10.0,
+):
     if method == "linear_vuf":
         return _build_hook(direction, alpha)
     if method == "sae_projected":
         return _build_sae_projected_hook(direction, sae, alpha)
-    if method in ("sae_emd", "sae_clamp"):
-        raise NotImplementedError(
-            f"intervene.method={method!r} needs the sae_features stage to "
-            "select uncertainty/certainty feature indices; this lands in a "
-            "follow-up commit."
+    if method == "sae_emd":
+        if uncertainty_idx is None or certainty_idx is None:
+            raise ValueError(
+                "sae_emd requires `sae_features/stats.parquet` — run the "
+                "`sae_features` stage before `intervene`."
+            )
+        return _build_sae_emd_hook(uncertainty_idx, certainty_idx, sae, alpha)
+    if method == "sae_clamp":
+        if uncertainty_idx is None or certainty_idx is None:
+            raise ValueError(
+                "sae_clamp requires `sae_features/stats.parquet` — run the "
+                "`sae_features` stage before `intervene`."
+            )
+        return _build_sae_clamp_hook(
+            uncertainty_idx, certainty_idx, sae, alpha, target=clamp_target,
         )
     raise NotImplementedError(f"Unknown intervene.method={method!r}")
+
+
+def _load_sae_feature_indices(ctx: PipelineContext) -> tuple[list[int], list[int]]:
+    stats = ctx.store.load_parquet("sae_features/stats.parquet")
+    unc = stats.loc[stats["selected_as"] == "uncertainty", "feature_id"].tolist()
+    cer = stats.loc[stats["selected_as"] == "certainty", "feature_id"].tolist()
+    return [int(x) for x in unc], [int(x) for x in cer]
 
 
 def _compute_adaptive_alphas(
@@ -153,9 +237,18 @@ def _run_fixed(
 ) -> list[str]:
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
+    unc_idx, cer_idx = (
+        _load_sae_feature_indices(ctx)
+        if cfg.method in ("sae_emd", "sae_clamp")
+        else (None, None)
+    )
     outputs: list[str] = []
     for alpha in cfg.alpha_grid:
-        hook = _build_hook_dispatch(cfg.method, direction, alpha, ctx.sae)
+        hook = _build_hook_dispatch(
+            cfg.method, direction, alpha, ctx.sae,
+            uncertainty_idx=unc_idx, certainty_idx=cer_idx,
+            clamp_target=cfg.sae_clamp_target,
+        )
         greedy = ctx.llm.generate_with_hook(
             prompts, hook_layer=target_layer, hook_fn=hook,
             temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
@@ -193,6 +286,11 @@ def _run_adaptive(
 ) -> list[str]:
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
+    unc_idx, cer_idx = (
+        _load_sae_feature_indices(ctx)
+        if cfg.method in ("sae_emd", "sae_clamp")
+        else (None, None)
+    )
 
     alphas_df = _compute_adaptive_alphas(ctx, sample_ids, cfg.alpha_max)
     ctx.store.save_parquet(f"{ADAPTIVE_DIR}/alphas.parquet", alphas_df)
@@ -204,7 +302,11 @@ def _run_adaptive(
     rows: list[dict] = []
     for i, (sid, prompt) in enumerate(zip(sample_ids, prompts, strict=True)):
         alpha_i = float(alphas_df.iloc[i]["alpha"])
-        hook = _build_hook_dispatch(cfg.method, direction, alpha_i, ctx.sae)
+        hook = _build_hook_dispatch(
+            cfg.method, direction, alpha_i, ctx.sae,
+            uncertainty_idx=unc_idx, certainty_idx=cer_idx,
+            clamp_target=cfg.sae_clamp_target,
+        )
 
         greedy_i = ctx.llm.generate_with_hook(
             [prompt], hook_layer=target_layer, hook_fn=hook,
@@ -270,12 +372,6 @@ def _rows_for_generations(sample_ids, greedy, sampled, *, alpha: float) -> list[
 
 def run(ctx: PipelineContext) -> list[str]:
     cfg = ctx.cfg.stages.intervene
-
-    if cfg.method in ("sae_emd", "sae_clamp"):
-        raise NotImplementedError(
-            f"intervene.method={cfg.method!r} is not implemented yet. "
-            "Use 'linear_vuf' or 'sae_projected' for now."
-        )
 
     vuf_meta = ctx.store.load_parquet("vuf/meta.parquet")
     available = sorted(int(x) for x in vuf_meta["layer"].tolist())

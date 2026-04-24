@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 OUTPUT_META = "vuf/meta.parquet"
+OUTPUT_SPLITS = "vuf/splits.parquet"
 
 
 def _layer_in_path(layer: int) -> str:
@@ -92,6 +93,19 @@ def run(ctx: PipelineContext) -> list[str]:
     vu_per_q = _per_question_mean_vu(judge)
     uncertain_ids, certain_ids = _split_ids(vu_per_q, stage_cfg.n_top, stage_cfg.n_bot)
 
+    # Persist split for downstream stages (sae_features) to reuse without
+    # recomputing the sort. One row per question with the VU that drove it.
+    splits_rows: list[dict] = []
+    for sid, vu in vu_per_q.items():
+        if sid in uncertain_ids:
+            split = "uncertain"
+        elif sid in certain_ids:
+            split = "certain"
+        else:
+            split = "middle"
+        splits_rows.append({"sample_id": sid, "mean_vu": float(vu), "split": split})
+    ctx.store.save_parquet(OUTPUT_SPLITS, pd.DataFrame(splits_rows))
+
     meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
     n_layers = int(meta.iloc[0]["n_layers"])
     layers = _resolve_layers(stage_cfg.layers, n_layers)
@@ -138,4 +152,5 @@ def run(ctx: PipelineContext) -> list[str]:
 
     ctx.store.save_parquet(OUTPUT_META, pd.DataFrame(dir_meta))
     outputs.append(OUTPUT_META)
+    outputs.append(OUTPUT_SPLITS)
     return outputs
