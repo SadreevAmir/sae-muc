@@ -29,33 +29,53 @@ uv run sae-muc --help          # stub today; real stages land as they are built
 
 ## Server setup (real runs)
 
+Full walkthrough with GPU / CUDA / tmux specifics lives at
+[`scripts/server_setup.md`](scripts/server_setup.md). TL;DR:
+
 ```bash
 ssh user@server
-git clone <repo-url> ~/sae-muc && cd ~/sae-muc
+git clone https://github.com/SadreevAmir/sae-muc.git ~/sae-muc && cd ~/sae-muc
 git checkout feature/server-pipeline
 uv sync --all-extras
-cp .env.example .env && $EDITOR .env   # fill HF_TOKEN and OPENROUTER_API_KEY
-uv run huggingface-cli login           # for gated models (Mistral, Llama)
+cp .env.example .env && $EDITOR .env     # fill HF_TOKEN + OPENROUTER_API_KEY
+uv run huggingface-cli login             # for gated models (Mistral, Llama)
 
 tmux new -s run
-# inside tmux — the run survives if SSH drops:
-uv run sae-muc run all --config configs/experiment/mistral_nq.yaml
+uv run sae-muc run --config configs/experiment/qwen05b_smoke.yaml
 # detach: Ctrl-b d         reattach: tmux attach -t run
+```
+
+## Launch a server run from your laptop
+
+```bash
+export SAE_MUC_SSH_HOST=user@server
+./scripts/remote_run.sh configs/experiment/qwen25_7b_triviaqa.yaml
+```
+
+The helper ssh's in, pulls the branch, `uv sync`s, and starts the run in
+a fresh `tmux` session whose name it prints. Attach later with
+`ssh $SAE_MUC_SSH_HOST tmux attach -t <session>`.
+
+## Pull artefacts back
+
+```bash
+export SAE_MUC_SSH=user@server:/home/you/sae-muc
+./scripts/sync_artifacts.sh <run_id>            # parquet / json only
+./scripts/sync_artifacts.sh --heavy <run_id>    # also safetensors (bigger)
 ```
 
 ## Common operations
 
 - **Switch config** — change `--config` argument; each config resolves into
   one `data/runs/<run_id>/`.
-- **Pull artefacts back to your laptop:**
-  ```bash
-  rsync -az server:~/sae-muc/data/runs/<run_id>/{metrics.json,*.parquet} \
-        ./local_copy/
-  ```
 - **Read a parquet artefact:**
   ```python
   import pandas as pd
   pd.read_parquet("data/runs/<run_id>/generations.parquet")
+  ```
+- **Compare before/after intervention:**
+  ```python
+  pd.read_parquet("data/runs/<run_id>/metrics_comparison.parquet")
   ```
 
 ## Secrets
