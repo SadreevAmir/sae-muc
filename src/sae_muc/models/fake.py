@@ -53,8 +53,14 @@ class FakeBackend:
             per_prompt: list[Generation] = []
             for i in range(n):
                 digest = hashlib.sha256(f"{prompt}|{i}|{temperature:.4f}".encode()).hexdigest()
-                rng = random.Random(int(digest[:16], 16))
-                per_prompt.append(Generation(text=rng.choice(_CANNED), finish_reason="stop"))
+                if "Decisiveness score" in prompt:
+                    # Judge-shaped prompt — return a deterministic number in [0, 1] so the
+                    # judge-parse step produces usable VU scores in full-pipeline tests.
+                    score = (int(digest[:8], 16) % 1001) / 1000.0
+                    per_prompt.append(Generation(text=f"{score:.3f}", finish_reason="stop"))
+                else:
+                    rng = random.Random(int(digest[:16], 16))
+                    per_prompt.append(Generation(text=rng.choice(_CANNED), finish_reason="stop"))
             out.append(per_prompt)
         return out
 
