@@ -28,6 +28,8 @@ def load_samples(cfg: DatasetConfig) -> list[Sample]:
         return _load_nq_open(cfg)
     if cfg.name == "popqa":
         return _load_popqa(cfg)
+    if cfg.name == "fake":
+        return _load_fake(cfg)
     raise ValueError(f"Unknown dataset: {cfg.name!r}")
 
 
@@ -67,6 +69,28 @@ def _load_nq_open(cfg: DatasetConfig) -> list[Sample]:
                 sample_id=f"nq_open:{cfg.split}:{i}",
                 question=row["question"],
                 gold_answers=list(row["answer"]),
+            )
+        )
+    return samples
+
+
+def _load_fake(cfg: DatasetConfig) -> list[Sample]:
+    """Synthetic in-memory dataset for offline smoke tests.
+
+    No network, no HF download. Deterministic from `cfg.seed` and
+    `cfg.n_samples`. Each question asks for an integer and the golden
+    answer is the same number written out — good enough to exercise the
+    full pipeline on fakes without any external state.
+    """
+    _WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+    samples: list[Sample] = []
+    for i in range(cfg.n_samples):
+        num = (cfg.seed + i) % len(_WORDS)
+        samples.append(
+            Sample(
+                sample_id=f"fake:{cfg.split}:{i}",
+                question=f"What is the word for the number {num}?",
+                gold_answers=[_WORDS[num]],
             )
         )
     return samples

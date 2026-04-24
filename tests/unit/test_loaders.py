@@ -141,3 +141,21 @@ def test_unknown_dataset_raises():
     cfg = DatasetConfig.model_construct(name="mystery", split="x", n_samples=1, seed=0)
     with pytest.raises(ValueError, match="Unknown dataset"):
         load_samples(cfg)
+
+
+def test_fake_dataset_is_offline_and_deterministic():
+    """`name=fake` must not call the HF loader and must be deterministic from cfg.seed."""
+    cfg_a = DatasetConfig(name="fake", split="validation", n_samples=4, seed=0)
+    cfg_b = DatasetConfig(name="fake", split="validation", n_samples=4, seed=0)
+    cfg_c = DatasetConfig(name="fake", split="validation", n_samples=4, seed=7)
+
+    a = [(s.sample_id, s.question, tuple(s.gold_answers)) for s in load_samples(cfg_a)]
+    b = [(s.sample_id, s.question, tuple(s.gold_answers)) for s in load_samples(cfg_b)]
+    c = [(s.sample_id, s.question, tuple(s.gold_answers)) for s in load_samples(cfg_c)]
+    assert a == b
+    assert a != c
+    assert len(a) == 4
+    for sid, q, golds in a:
+        assert sid.startswith("fake:validation:")
+        assert "number" in q.lower()
+        assert len(golds) == 1

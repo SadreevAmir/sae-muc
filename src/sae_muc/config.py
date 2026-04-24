@@ -27,7 +27,7 @@ class ModelConfig(_Frozen):
 
 
 class DatasetConfig(_Frozen):
-    name: Literal["triviaqa", "nq_open", "popqa"]
+    name: Literal["triviaqa", "nq_open", "popqa", "fake"]
     split: str = "validation"
     n_samples: int = 500
     seed: int = 42
