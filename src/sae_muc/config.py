@@ -62,6 +62,7 @@ class InterveneStage(_Frozen):
     method: Literal["linear_vuf", "sae_emd", "sae_projected", "sae_clamp"] = "linear_vuf"
     alpha_grid: list[float] = Field(default_factory=lambda: [-1.0, -0.5, 0.0, 0.5, 1.0])
     alpha_max: float = 1.0
+    layer: int | Literal["auto"] = "auto"
 
 
 class StagesConfig(_Frozen):

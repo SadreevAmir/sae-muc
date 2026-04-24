@@ -157,3 +157,70 @@ class HFLocalBackend:
     def tokenize_length(self, text: str, *, add_special_tokens: bool = True) -> int:
         self._ensure_loaded()
         return len(self._tokenizer(text, add_special_tokens=add_special_tokens).input_ids)
+
+    # ----------------------------------------------------------------- #
+    # Generation with forward hook (for MUC intervention)                #
+    # ----------------------------------------------------------------- #
+
+    def generate_with_hook(
+        self,
+        prompts: list[str],
+        *,
+        hook_layer: int,
+        hook_fn,
+        temperature: float,
+        max_new_tokens: int,
+        n: int = 1,
+        system: str | None = None,
+    ) -> list[list[Generation]]:
+        """Same as `generate` but with `hook_fn` applied at `hook_layer`'s residual stream.
+
+        `hook_fn(residual: [B, T, D]) -> [B, T, D]` runs after every forward of the
+        target transformer block. Path is Llama/Mistral/Qwen2-compatible
+        (`model.model.layers[i]`); other architectures will need a layer-map update.
+        """
+        import torch
+
+        self._ensure_loaded()
+        texts = [self._apply_chat_template(p, system=system) for p in prompts]
+        prev_side = self._tokenizer.padding_side
+        self._tokenizer.padding_side = "left"
+        try:
+            inputs = self._tokenizer(texts, return_tensors="pt", padding=True).to(self._device)
+        finally:
+            self._tokenizer.padding_side = prev_side
+
+        input_len = inputs.input_ids.shape[1]
+        do_sample = temperature > 1e-5
+        gen_kwargs: dict = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+            "num_return_sequences": n,
+            "pad_token_id": self._tokenizer.pad_token_id,
+        }
+        if do_sample:
+            gen_kwargs["temperature"] = temperature
+
+        def _wrapped(module, _inputs, output):
+            if isinstance(output, tuple):
+                return (hook_fn(output[0]),) + output[1:]
+            return hook_fn(output)
+
+        target = self._model.model.layers[hook_layer]
+        handle = target.register_forward_hook(_wrapped)
+        try:
+            with torch.inference_mode():
+                out = self._model.generate(**inputs, **gen_kwargs)
+        finally:
+            handle.remove()
+
+        decoded = self._tokenizer.batch_decode(out[:, input_len:], skip_special_tokens=True)
+        result: list[list[Generation]] = []
+        for i in range(len(prompts)):
+            result.append(
+                [
+                    Generation(text=decoded[i * n + j], finish_reason="stop")
+                    for j in range(n)
+                ]
+            )
+        return result

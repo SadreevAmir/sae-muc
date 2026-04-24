@@ -11,6 +11,7 @@ from sae_muc.pipeline import (
     detect,
     generate,
     hidden_states,
+    intervene,
     judge,
     prepare,
     semantic_entropy,
@@ -32,7 +33,8 @@ STAGES: dict[str, StageFn] = {
     "hidden_states": hidden_states.run,
     "vuf": vuf.run,
     "detect": detect.run,
-    # intervene / evaluate land in upcoming commits.
+    "intervene": intervene.run,
+    # evaluate lands in an upcoming commit.
 }
 
 
