@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 
 from sae_muc.artifacts import StageManifest
 from sae_muc.pipeline import (
+    accuracy_judge,
     generate,
     hidden_states,
     judge,
@@ -25,6 +26,7 @@ STAGES: dict[str, StageFn] = {
     "prepare": prepare.run,
     "generate": generate.run,
     "judge": judge.run,
+    "accuracy_judge": accuracy_judge.run,
     "semantic_entropy": semantic_entropy.run,
     "hidden_states": hidden_states.run,
     "vuf": vuf.run,

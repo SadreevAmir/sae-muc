@@ -46,3 +46,21 @@ Decisiveness score:"""
 
 def format_vu_judge_prompt(question: str, answer: str) -> str:
     return VU_JUDGE_PROMPT.format(question=question, answer=answer)
+
+
+# Appendix A.3 — accuracy judge. Asks whether the proposed answer is
+# semantically equivalent to any of the golden references. Reply is yes/no.
+ACCURACY_JUDGE_PROMPT = """We are assessing the quality of answers to the following question: {question}
+The following are expected answers to this question: {golden_answers}
+The proposed answer is: {answer}
+Within the context of the question, does the proposed answer mean the same as any of the expected answers? Respond only with yes or no. Response:"""
+
+
+def format_accuracy_judge_prompt(
+    question: str, golden_answers: list[str], answer: str
+) -> str:
+    return ACCURACY_JUDGE_PROMPT.format(
+        question=question,
+        golden_answers=", ".join(golden_answers),
+        answer=answer,
+    )
