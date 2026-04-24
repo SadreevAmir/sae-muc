@@ -9,6 +9,7 @@ from sae_muc.artifacts import StageManifest
 from sae_muc.pipeline import (
     accuracy_judge,
     detect,
+    evaluate,
     generate,
     hidden_states,
     intervene,
@@ -34,7 +35,7 @@ STAGES: dict[str, StageFn] = {
     "vuf": vuf.run,
     "detect": detect.run,
     "intervene": intervene.run,
-    # evaluate lands in an upcoming commit.
+    "evaluate": evaluate.run,
 }
 
 
