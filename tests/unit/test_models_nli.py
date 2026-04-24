@@ -18,10 +18,15 @@ def test_fake_nli_batch():
     assert nli.entails(pairs) == [True, False, False]
 
 
-def test_hf_local_nli_stub_raises():
-    nli = HFLocalNLIBackend("microsoft/deberta-v2-xxlarge-mnli")
-    with pytest.raises(NotImplementedError):
-        nli.entails([("a", "b")])
+def test_hf_local_nli_is_lazy_until_entails_called():
+    # Instantiation must be cheap — no model download at this point.
+    nli = HFLocalNLIBackend("MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli")
+    assert nli.name == "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+    assert nli._model is None
+    assert nli._tokenizer is None
+    # Empty batch short-circuits — still no load.
+    assert nli.entails([]) == []
+    assert nli._model is None
 
 
 def test_build_nli_backend_dispatch():
