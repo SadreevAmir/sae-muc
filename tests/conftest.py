@@ -54,6 +54,8 @@ def fake_cfg(tmp_path) -> ExperimentConfig:
             "dataset": {"name": "nq_open", "split": "validation", "n_samples": 5},
             "judge": {"provider": "fake", "model": "fake-judge"},
             "nli": {"provider": "fake", "model": "fake-nli"},
+            # FakeBackend._D_MODEL = 8; SAE d_in must match.
+            "sae": {"provider": "fake", "d_in": 8, "d_latent": 16, "seed": 7},
             "data_root": str(tmp_path / "data"),
             "stages": {
                 "generate": {"n_samples": 3, "max_new_tokens": 16},

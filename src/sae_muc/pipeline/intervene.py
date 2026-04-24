@@ -95,20 +95,16 @@ def _build_sae_projected_hook(direction: "torch.Tensor", sae, alpha: float):
     return hook_fn
 
 
-def _build_hook_dispatch(method: str, direction: "torch.Tensor", alpha: float):
+def _build_hook_dispatch(method: str, direction: "torch.Tensor", alpha: float, sae):
     if method == "linear_vuf":
         return _build_hook(direction, alpha)
     if method == "sae_projected":
-        from sae_muc.models.sae import build_sae_backend
-
-        d_in = int(direction.shape[-1])
-        sae = build_sae_backend("fake", d_in=d_in)
         return _build_sae_projected_hook(direction, sae, alpha)
     if method in ("sae_emd", "sae_clamp"):
         raise NotImplementedError(
-            f"intervene.method={method!r} needs a per-feature selection step "
-            "(see archive/old-prototype/sae_muc/build_intervention_config_v2.py); "
-            "this lands in a follow-up commit."
+            f"intervene.method={method!r} needs the sae_features stage to "
+            "select uncertainty/certainty feature indices; this lands in a "
+            "follow-up commit."
         )
     raise NotImplementedError(f"Unknown intervene.method={method!r}")
 
@@ -159,7 +155,7 @@ def _run_fixed(
     gen_cfg = ctx.cfg.stages.generate
     outputs: list[str] = []
     for alpha in cfg.alpha_grid:
-        hook = _build_hook_dispatch(cfg.method, direction, alpha)
+        hook = _build_hook_dispatch(cfg.method, direction, alpha, ctx.sae)
         greedy = ctx.llm.generate_with_hook(
             prompts, hook_layer=target_layer, hook_fn=hook,
             temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
@@ -208,7 +204,7 @@ def _run_adaptive(
     rows: list[dict] = []
     for i, (sid, prompt) in enumerate(zip(sample_ids, prompts, strict=True)):
         alpha_i = float(alphas_df.iloc[i]["alpha"])
-        hook = _build_hook_dispatch(cfg.method, direction, alpha_i)
+        hook = _build_hook_dispatch(cfg.method, direction, alpha_i, ctx.sae)
 
         greedy_i = ctx.llm.generate_with_hook(
             [prompt], hook_layer=target_layer, hook_fn=hook,

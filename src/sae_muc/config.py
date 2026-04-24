@@ -78,11 +78,36 @@ class DetectStage(_Frozen):
     refusal_vu_threshold: float = 0.85
 
 
+class SAEFeaturesStage(_Frozen):
+    # Top K features to mark as 'uncertainty' (positive Cohen's d) and K to
+    # mark as 'certainty' (negative d). Paper prototype used ~50.
+    k_top: int = 50
+
+
 class StagesConfig(_Frozen):
     generate: GenerateStage = GenerateStage()
     vuf: VUFStage = VUFStage()
     intervene: InterveneStage = InterveneStage()
     detect: DetectStage = DetectStage()
+    sae_features: SAEFeaturesStage = SAEFeaturesStage()
+
+
+class SAEConfig(_Frozen):
+    """Where the SAE comes from, plus dimensions for the fake backend.
+
+    provider=fake uses an in-process random linear projection for tests.
+    provider=sae_lens loads a pretrained SAE by (release, sae_id). In that
+    case d_in/d_latent are ignored — they come from the SAE config. For
+    the fake backend, d_in must match the hidden-state dimensionality of
+    the generator model (e.g. 896 for Qwen2.5-0.5B; 8 for FakeBackend).
+    """
+
+    provider: Literal["fake", "sae_lens"] = "fake"
+    d_in: int = 8
+    d_latent: int = 16
+    seed: int = 42
+    release: str | None = None
+    sae_id: str | None = None
 
 
 class ExperimentConfig(_Frozen):
@@ -90,6 +115,7 @@ class ExperimentConfig(_Frozen):
     dataset: DatasetConfig
     judge: JudgeConfig
     nli: NLIConfig = NLIConfig()
+    sae: SAEConfig = SAEConfig()
     stages: StagesConfig = StagesConfig()
     seed: int = 42
     data_root: Path = Path("data")
