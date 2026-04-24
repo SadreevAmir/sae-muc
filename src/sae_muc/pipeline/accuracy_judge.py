@@ -47,14 +47,18 @@ def parse_yes_no(text: str) -> bool | None:
     return None
 
 
-def run(ctx: PipelineContext) -> list[str]:
+def score_generations(
+    ctx: PipelineContext,
+    gens: pd.DataFrame,
+    output_name: str,
+) -> list[str]:
+    """Ask the accuracy judge about the greedy rows in `gens`; save to `output_name`."""
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
-    gens = ctx.store.load_parquet("generations.parquet")
     greedy = gens[gens["kind"] == "greedy"]
     total = len(greedy)
     log.info(
-        "checking accuracy of %d greedy answers via %s",
-        total, ctx.cfg.judge.model,
+        "checking accuracy of %d greedy answers via %s -> %s",
+        total, ctx.cfg.judge.model, output_name,
     )
     progress_every = max(1, total // 5)
 
@@ -98,5 +102,10 @@ def run(ctx: PipelineContext) -> list[str]:
     if errored:
         log.warning("accuracy_judge: %d/%d responses errored after retries", errored, len(rows))
 
-    ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
-    return [OUTPUT]
+    ctx.store.save_parquet(output_name, pd.DataFrame(rows))
+    return [output_name]
+
+
+def run(ctx: PipelineContext) -> list[str]:
+    gens = ctx.store.load_parquet("generations.parquet")
+    return score_generations(ctx, gens, OUTPUT)

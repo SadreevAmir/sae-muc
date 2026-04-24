@@ -9,14 +9,18 @@ from collections.abc import Callable, Iterable
 from sae_muc.artifacts import StageManifest
 from sae_muc.pipeline import (
     accuracy_judge,
+    accuracy_judge_post,
     detect,
     evaluate,
+    evaluate_post,
     generate,
     hidden_states,
     intervene,
     judge,
+    judge_post,
     prepare,
     semantic_entropy,
+    semantic_entropy_post,
     vuf,
 )
 from sae_muc.pipeline.context import PipelineContext
@@ -37,6 +41,12 @@ STAGES: dict[str, StageFn] = {
     "detect": detect.run,
     "intervene": intervene.run,
     "evaluate": evaluate.run,
+    # Post-intervention: re-score every intervention variant, then produce
+    # the before/after comparison table (paper Tab.3).
+    "judge_post": judge_post.run,
+    "accuracy_judge_post": accuracy_judge_post.run,
+    "semantic_entropy_post": semantic_entropy_post.run,
+    "evaluate_post": evaluate_post.run,
 }
 
 

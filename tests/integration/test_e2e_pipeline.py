@@ -27,6 +27,7 @@ _EXPECTED_ARTEFACTS = (
     "detection_metrics.json",
     "intervention/meta.parquet",
     "metrics.json",
+    "metrics_comparison.parquet",
 )
 
 
@@ -105,3 +106,42 @@ def test_partial_pipeline_then_resume_finishes_remaining(fake_ctx):
     # Every artefact now present; every manifest written.
     for rel in _EXPECTED_ARTEFACTS:
         assert fake_ctx.store.exists(rel), f"missing {rel!r}"
+
+
+def test_post_intervention_metrics_comparison(fake_ctx):
+    """After running the full pipeline, `metrics_comparison.parquet` should
+    hold one row per intervention variant plus a baseline `before` row, each
+    with the same metric columns as `metrics.json`.
+    """
+    import pandas as pd
+
+    run_all(fake_ctx)
+
+    # Baseline config: intervene.mode="fixed" with default alpha_grid of
+    # 5 values → 5 variants + 1 "before" row = 6 rows.
+    cmp_df = fake_ctx.store.load_parquet("metrics_comparison.parquet")
+    assert "before" in cmp_df["variant"].tolist()
+    assert len(cmp_df) == 6
+    alpha_variants = [v for v in cmp_df["variant"] if v != "before"]
+    assert all(v.startswith("alpha_") for v in alpha_variants)
+
+    # Every variant dir holds its own metrics.json.
+    alphas_meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    for _, row in alphas_meta.iterrows():
+        from pathlib import Path
+
+        variant_dir = Path(row["path"]).parent
+        assert fake_ctx.store.exists(str(variant_dir / "metrics.json"))
+        assert fake_ctx.store.exists(str(variant_dir / "judge_scores.parquet"))
+        assert fake_ctx.store.exists(str(variant_dir / "accuracy.parquet"))
+        assert fake_ctx.store.exists(str(variant_dir / "semantic_entropy.parquet"))
+
+    # The "before" row metrics match the top-level metrics.json.
+    import json as _json
+
+    top_metrics = _json.loads(open(fake_ctx.store.path("metrics.json")).read())
+    before_row = cmp_df[cmp_df["variant"] == "before"].iloc[0]
+    assert before_row["n_total"] == top_metrics["n_total"]
+    assert before_row["hallucination_rate"] == pd.Series(
+        [top_metrics["hallucination_rate"]]
+    )[0]

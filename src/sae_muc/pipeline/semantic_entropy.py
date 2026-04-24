@@ -57,13 +57,17 @@ def _entropy(cluster_indices: list[int]) -> float:
     return -sum((c / total) * math.log(c / total) for c in counts.values())
 
 
-def run(ctx: PipelineContext) -> list[str]:
-    gens = ctx.store.load_parquet(INPUT)
+def cluster_generations(
+    ctx: PipelineContext,
+    gens: pd.DataFrame,
+    output_name: str,
+) -> list[str]:
+    """Cluster sampled answers in `gens` by bidirectional entailment; save SE."""
     sampled = gens[gens["kind"] == "sample"]
     n_questions = sampled["sample_id"].nunique()
     log.info(
-        "clustering %d sampled answers across %d questions via NLI (%s)",
-        len(sampled), n_questions, ctx.cfg.nli.model,
+        "clustering %d sampled answers across %d questions via NLI (%s) -> %s",
+        len(sampled), n_questions, ctx.cfg.nli.model, output_name,
     )
 
     rows: list[dict] = []
@@ -78,5 +82,10 @@ def run(ctx: PipelineContext) -> list[str]:
                 "n_samples": len(answers),
             }
         )
-    ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
-    return [OUTPUT]
+    ctx.store.save_parquet(output_name, pd.DataFrame(rows))
+    return [output_name]
+
+
+def run(ctx: PipelineContext) -> list[str]:
+    gens = ctx.store.load_parquet(INPUT)
+    return cluster_generations(ctx, gens, OUTPUT)

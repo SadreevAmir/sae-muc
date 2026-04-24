@@ -46,12 +46,20 @@ def _pearson(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(x, y)[0, 1])
 
 
-def _build_frame(ctx: PipelineContext) -> pd.DataFrame:
-    gens = ctx.store.load_parquet("generations.parquet")
+def build_frame_from_paths(
+    ctx: PipelineContext,
+    *,
+    generations_path: str,
+    accuracy_path: str,
+    judge_path: str,
+    se_path: str,
+) -> pd.DataFrame:
+    """Join the per-variant artefacts into the per-question frame metrics consume."""
+    gens = ctx.store.load_parquet(generations_path)
     greedy = gens[gens["kind"] == "greedy"].set_index("sample_id")
-    accuracy = ctx.store.load_parquet("accuracy.parquet").set_index("sample_id")
-    judge = ctx.store.load_parquet("judge_scores.parquet")
-    se = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")
+    accuracy = ctx.store.load_parquet(accuracy_path).set_index("sample_id")
+    judge = ctx.store.load_parquet(judge_path)
+    se = ctx.store.load_parquet(se_path).set_index("sample_id")
     vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
     vu_greedy_per_q = (
         judge[judge["kind"] == "greedy"].set_index("sample_id")["vu_score"]
@@ -116,6 +124,16 @@ def _compute_metrics(df: pd.DataFrame, vu_threshold: float, su_threshold: float 
         "vu_incorrect_mean": _safe_mean(df.loc[hall_mask, "vu"]),
         "thresholds": {"vu": float(vu_threshold), "su": float(su_threshold)},
     }
+
+
+def _build_frame(ctx: PipelineContext) -> pd.DataFrame:
+    return build_frame_from_paths(
+        ctx,
+        generations_path="generations.parquet",
+        accuracy_path="accuracy.parquet",
+        judge_path="judge_scores.parquet",
+        se_path="semantic_entropy.parquet",
+    )
 
 
 def run(ctx: PipelineContext) -> list[str]:

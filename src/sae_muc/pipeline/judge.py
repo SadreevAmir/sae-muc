@@ -38,13 +38,21 @@ def parse_decisiveness(text: str) -> float | None:
     return None
 
 
-def run(ctx: PipelineContext) -> list[str]:
+def score_generations(
+    ctx: PipelineContext,
+    gens: pd.DataFrame,
+    output_name: str,
+) -> list[str]:
+    """Score VU for every row of `gens` and write the result at `output_name`.
+
+    Used by both `run()` (baseline generations) and `judge_post.run()`
+    (intervened generations).
+    """
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
-    gens = ctx.store.load_parquet("generations.parquet")
     total = len(gens)
     log.info(
-        "scoring VU for %d generations via %s (provider=%s)",
-        total, ctx.cfg.judge.model, ctx.cfg.judge.provider,
+        "scoring VU for %d generations via %s (provider=%s) -> %s",
+        total, ctx.cfg.judge.model, ctx.cfg.judge.provider, output_name,
     )
     progress_every = max(1, total // 10)
 
@@ -94,5 +102,10 @@ def run(ctx: PipelineContext) -> list[str]:
     if errored:
         log.warning("judge: %d/%d responses errored after retries", errored, len(rows))
 
-    ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
-    return [OUTPUT]
+    ctx.store.save_parquet(output_name, pd.DataFrame(rows))
+    return [output_name]
+
+
+def run(ctx: PipelineContext) -> list[str]:
+    gens = ctx.store.load_parquet("generations.parquet")
+    return score_generations(ctx, gens, OUTPUT)
