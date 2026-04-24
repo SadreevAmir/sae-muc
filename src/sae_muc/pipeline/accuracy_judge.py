@@ -51,11 +51,17 @@ def run(ctx: PipelineContext) -> list[str]:
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
     gens = ctx.store.load_parquet("generations.parquet")
     greedy = gens[gens["kind"] == "greedy"]
+    total = len(greedy)
+    log.info(
+        "checking accuracy of %d greedy answers via %s",
+        total, ctx.cfg.judge.model,
+    )
+    progress_every = max(1, total // 5)
 
     rows: list[dict] = []
     unparsed = 0
     errored = 0
-    for _, row in greedy.iterrows():
+    for i, (_, row) in enumerate(greedy.iterrows()):
         sid = row["sample_id"]
         sample_row = samples.loc[sid]
         prompt = format_accuracy_judge_prompt(
@@ -84,6 +90,8 @@ def run(ctx: PipelineContext) -> list[str]:
             errored += 1
 
         rows.append({"sample_id": sid, "is_correct": is_correct, "raw": raw})
+        if (i + 1) % progress_every == 0 and (i + 1) < total:
+            log.info("  progress: %d/%d (%d%%)", i + 1, total, (i + 1) * 100 // total)
 
     if unparsed:
         log.warning("accuracy_judge: %d/%d responses were unparseable", unparsed, len(rows))

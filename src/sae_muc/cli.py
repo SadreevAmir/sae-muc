@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
+
+from sae_muc.logging_setup import configure as _configure_logging
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
 @app.callback()
 def _bootstrap() -> None:
-    """Load .env from the current working directory before any command runs."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    """Configure logging and load .env before any command runs."""
+    _configure_logging("INFO")
     env_path = Path.cwd() / ".env"
     if env_path.exists():
         load_dotenv(env_path)

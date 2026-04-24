@@ -11,6 +11,7 @@ left out of SE to stay faithful to the paper's Appendix C protocol.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import Counter
 
@@ -18,6 +19,8 @@ import pandas as pd
 
 from sae_muc.models.nli import NLIBackend
 from sae_muc.pipeline.context import PipelineContext
+
+log = logging.getLogger(__name__)
 
 INPUT = "generations.parquet"
 OUTPUT = "semantic_entropy.parquet"
@@ -57,6 +60,11 @@ def _entropy(cluster_indices: list[int]) -> float:
 def run(ctx: PipelineContext) -> list[str]:
     gens = ctx.store.load_parquet(INPUT)
     sampled = gens[gens["kind"] == "sample"]
+    n_questions = sampled["sample_id"].nunique()
+    log.info(
+        "clustering %d sampled answers across %d questions via NLI (%s)",
+        len(sampled), n_questions, ctx.cfg.nli.model,
+    )
 
     rows: list[dict] = []
     for sample_id, group in sampled.groupby("sample_id"):

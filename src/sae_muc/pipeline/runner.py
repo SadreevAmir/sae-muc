@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterable
 
 from sae_muc.artifacts import StageManifest
@@ -39,6 +40,23 @@ STAGES: dict[str, StageFn] = {
 }
 
 
+def _fmt_duration(seconds: float) -> str:
+    if seconds < 1.0:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(seconds, 60)
+    return f"{int(m)}m{int(s):02d}s"
+
+
+def _fmt_outputs(outputs: list[str]) -> str:
+    if not outputs:
+        return "no outputs"
+    if len(outputs) == 1:
+        return outputs[0]
+    return f"{len(outputs)} outputs (first: {outputs[0]})"
+
+
 def run_stage(
     ctx: PipelineContext,
     stage_name: str,
@@ -51,12 +69,19 @@ def run_stage(
     stage_fn = STAGES[stage_name]
     manifest = StageManifest(ctx.store.run_dir, stage_name)
     if not force and manifest.should_skip():
-        log.info("stage %s: skipped (cached)", stage_name)
+        log.info("[skip] %s (cached)", stage_name)
         return False
-    log.info("stage %s: running", stage_name)
-    outputs = stage_fn(ctx)
+    log.info("==> %s", stage_name)
+    start = time.monotonic()
+    try:
+        outputs = stage_fn(ctx)
+    except Exception:
+        elapsed = time.monotonic() - start
+        log.info("[fail] %s after %s", stage_name, _fmt_duration(elapsed))
+        raise
+    elapsed = time.monotonic() - start
     manifest.write(outputs=outputs)
-    log.info("stage %s: done (%d outputs)", stage_name, len(outputs))
+    log.info("[ok] %s · %s · %s", stage_name, _fmt_duration(elapsed), _fmt_outputs(outputs))
     return True
 
 

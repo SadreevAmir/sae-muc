@@ -17,6 +17,7 @@ but is skipped by default for VUF.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -25,6 +26,8 @@ from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
     import torch
+
+log = logging.getLogger(__name__)
 
 OUTPUT_META = "vuf/meta.parquet"
 
@@ -92,6 +95,10 @@ def run(ctx: PipelineContext) -> list[str]:
     meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
     n_layers = int(meta.iloc[0]["n_layers"])
     layers = _resolve_layers(stage_cfg.layers, n_layers)
+    log.info(
+        "diff-in-means VUF: top %d uncertain vs bottom %d certain (pooling=%s, layers=%d)",
+        len(uncertain_ids), len(certain_ids), stage_cfg.pooling, len(layers),
+    )
 
     outputs: list[str] = []
     dir_meta: list[dict] = []

@@ -19,10 +19,14 @@ generations; that chain is deferred — see TODO.md.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from sae_muc.pipeline.context import PipelineContext
+
+log = logging.getLogger(__name__)
 
 OUTPUT = "metrics.json"
 
@@ -116,6 +120,12 @@ def _compute_metrics(df: pd.DataFrame, vu_threshold: float, su_threshold: float 
 
 def run(ctx: PipelineContext) -> list[str]:
     df = _build_frame(ctx)
+    log.info(
+        "computing Tab.3 metrics on %d samples (%d correct, %d refusals)",
+        len(df),
+        int(df["is_correct"].fillna(False).sum()),
+        int(df["is_refusal"].sum()),
+    )
     # Default thresholds: VU 0.5 (paper-ish), SU = median (balanced split).
     metrics = _compute_metrics(df, vu_threshold=0.5, su_threshold=None)
     ctx.store.save_json(OUTPUT, metrics)

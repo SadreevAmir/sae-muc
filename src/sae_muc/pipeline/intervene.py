@@ -22,6 +22,7 @@ Summary meta (paths, layer, method, mode) in `intervention/meta.parquet`.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -32,6 +33,8 @@ from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
     import torch
+
+log = logging.getLogger(__name__)
 
 OUTPUT_META = "intervention/meta.parquet"
 ADAPTIVE_DIR = "intervention/adaptive"
@@ -291,5 +294,13 @@ def run(ctx: PipelineContext) -> list[str]:
     prompts = [format_answer_prompt(q, eliciting=True) for q in samples["question"]]
 
     if cfg.mode == "adaptive":
+        log.info(
+            "mode=adaptive, method=%s, layer=%d, α_max=%.2f (per-question α via Eq.6)",
+            cfg.method, target_layer, cfg.alpha_max,
+        )
         return _run_adaptive(ctx, prompts, sample_ids, direction, target_layer)
+    log.info(
+        "mode=fixed, method=%s, layer=%d, α grid=%s",
+        cfg.method, target_layer, list(cfg.alpha_grid),
+    )
     return _run_fixed(ctx, prompts, sample_ids, direction, target_layer)

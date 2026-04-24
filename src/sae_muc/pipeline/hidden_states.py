@@ -18,10 +18,14 @@ recorded in `meta.parquet`.
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
 from sae_muc.pipeline.context import PipelineContext
+
+log = logging.getLogger(__name__)
 
 OUTPUT_META = "hidden_states/meta.parquet"
 OUTPUT_EMBED = "hidden_states/embedding.safetensors"
@@ -49,11 +53,16 @@ def run(ctx: PipelineContext) -> list[str]:
         texts.append(full_text)
         question_lens.append(ctx.llm.tokenize_length(question_text))
 
+    log.info("extracting residual-stream activations for %d samples", len(texts))
     hidden_list = ctx.llm.hidden_states(texts)
     # Each element shape: [n_layers+1, seq_len_i, d_model]. Layer 0 is
     # the token-embedding output; layers 1..n_layers are transformer blocks.
     n_hidden = hidden_list[0].shape[0]
     n_layers = n_hidden - 1
+    log.info(
+        "saving %d transformer layers (plus embedding) × %d samples",
+        n_layers, len(texts),
+    )
 
     outputs: list[str] = []
 

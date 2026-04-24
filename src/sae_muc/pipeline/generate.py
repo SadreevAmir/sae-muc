@@ -7,10 +7,14 @@ within a question (0 for the single greedy row).
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from sae_muc.data import format_answer_prompt
 from sae_muc.pipeline.context import PipelineContext
+
+log = logging.getLogger(__name__)
 
 INPUT = "samples.parquet"
 OUTPUT = "generations.parquet"
@@ -21,6 +25,11 @@ def run(ctx: PipelineContext) -> list[str]:
     samples = ctx.store.load_parquet(INPUT)
 
     prompts = [format_answer_prompt(q, eliciting=True) for q in samples["question"]]
+    log.info(
+        "generating 1 greedy @T=%.2f + %d samples @T=%.2f per question (%d questions, max_new_tokens=%d)",
+        stage_cfg.temperature_low, stage_cfg.n_samples, stage_cfg.temperature_high,
+        len(prompts), stage_cfg.max_new_tokens,
+    )
 
     greedy = ctx.llm.generate(
         prompts,

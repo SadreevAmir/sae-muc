@@ -45,9 +45,9 @@ def test_second_run_skips_every_stage(fake_ctx, caplog):
     caplog.clear()
     run_all(fake_ctx)
 
-    skipped = [r for r in caplog.records if "skipped" in r.getMessage()]
+    skipped = [r for r in caplog.records if r.getMessage().startswith("[skip]")]
     assert len(skipped) == len(STAGES), (
-        f"expected every stage ({len(STAGES)}) to report skipped; got {len(skipped)}: "
+        f"expected every stage ({len(STAGES)}) to report [skip]; got {len(skipped)}: "
         f"{[r.getMessage() for r in skipped]}"
     )
 
@@ -59,10 +59,9 @@ def test_force_all_reruns_every_stage(fake_ctx, caplog):
     caplog.clear()
     run_all(fake_ctx, force_all=True)
 
-    # No "skipped" messages; every stage runs.
-    skipped = [r for r in caplog.records if "skipped" in r.getMessage()]
+    skipped = [r for r in caplog.records if r.getMessage().startswith("[skip]")]
     assert skipped == []
-    ran = [r for r in caplog.records if "running" in r.getMessage()]
+    ran = [r for r in caplog.records if r.getMessage().startswith("==>")]
     assert len(ran) == len(STAGES)
 
 

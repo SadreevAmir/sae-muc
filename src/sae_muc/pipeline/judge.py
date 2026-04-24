@@ -41,11 +41,17 @@ def parse_decisiveness(text: str) -> float | None:
 def run(ctx: PipelineContext) -> list[str]:
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
     gens = ctx.store.load_parquet("generations.parquet")
+    total = len(gens)
+    log.info(
+        "scoring VU for %d generations via %s (provider=%s)",
+        total, ctx.cfg.judge.model, ctx.cfg.judge.provider,
+    )
+    progress_every = max(1, total // 10)
 
     rows: list[dict] = []
     unparsed = 0
     errored = 0
-    for _, gen_row in gens.iterrows():
+    for i, (_, gen_row) in enumerate(gens.iterrows()):
         question = samples.loc[gen_row["sample_id"], "question"]
         prompt = format_vu_judge_prompt(question=question, answer=gen_row["text"])
 
@@ -80,6 +86,8 @@ def run(ctx: PipelineContext) -> list[str]:
                 "raw": text,
             }
         )
+        if (i + 1) % progress_every == 0 and (i + 1) < total:
+            log.info("  progress: %d/%d (%d%%)", i + 1, total, (i + 1) * 100 // total)
 
     if unparsed:
         log.warning("judge: %d/%d responses were unparseable", unparsed, len(rows))

@@ -6,15 +6,24 @@ so the pipeline is self-contained inside the run directory.
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from sae_muc.data import load_samples
 from sae_muc.pipeline.context import PipelineContext
 
+log = logging.getLogger(__name__)
+
 OUTPUT = "samples.parquet"
 
 
 def run(ctx: PipelineContext) -> list[str]:
+    cfg = ctx.cfg.dataset
+    log.info(
+        "loading dataset %s (split=%s, n=%d, seed=%d)",
+        cfg.name, cfg.split, cfg.n_samples, cfg.seed,
+    )
     samples = load_samples(ctx.cfg.dataset)
     df = pd.DataFrame(
         {

@@ -113,6 +113,11 @@ def run(ctx: PipelineContext) -> list[str]:
     df = _build_feature_frame(ctx)
 
     trainable = df[(~df["is_refusal"]) & df["is_hallucinated"].notna()].copy()
+    log.info(
+        "fitting LR detector on %d trainable (%d refusals excluded, %d hallucinated in train set)",
+        len(trainable), int(df["is_refusal"].sum()),
+        int(trainable["is_hallucinated"].sum()) if not trainable.empty else 0,
+    )
     metrics: dict[str, Any] = {
         "n_total": int(len(df)),
         "n_refusal": int(df["is_refusal"].sum()),
