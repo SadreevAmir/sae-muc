@@ -55,14 +55,63 @@ def _build_hook(direction: "torch.Tensor", alpha: float):
     return hook_fn
 
 
+def _build_sae_projected_hook(direction: "torch.Tensor", sae, alpha: float):
+    """`sae_projected`: project VUF into SAE latent space, add α·latent_vuf, decode.
+
+    For each residual-stream activation `h`:
+        f    = sae.encode(h)
+        err  = h - sae.decode(f)
+        h'   = sae.decode(f + α · latent_vuf) + err
+    where `latent_vuf = sae.encode(direction)` is precomputed once.
+    """
+    import torch
+
+    # [1, d_in] → [1, d_latent] → [d_latent]
+    latent_vuf = sae.encode(direction.to(dtype=torch.float32).unsqueeze(0))[0]
+
+    def hook_fn(residual: "torch.Tensor") -> "torch.Tensor":
+        orig_shape = residual.shape
+        orig_dtype = residual.dtype
+        flat = residual.reshape(-1, orig_shape[-1]).to(dtype=torch.float32)
+        f = sae.encode(flat)
+        recon = sae.decode(f)
+        err = flat - recon
+        f_new = f + alpha * latent_vuf.to(f.device, dtype=f.dtype)
+        recon_new = sae.decode(f_new)
+        out = recon_new + err
+        return out.to(dtype=orig_dtype).reshape(orig_shape)
+
+    return hook_fn
+
+
+def _build_hook_dispatch(method: str, direction: "torch.Tensor", alpha: float):
+    if method == "linear_vuf":
+        return _build_hook(direction, alpha)
+    if method == "sae_projected":
+        from sae_muc.models.sae import build_sae_backend
+
+        d_in = int(direction.shape[-1])
+        sae = build_sae_backend("fake", d_in=d_in)
+        return _build_sae_projected_hook(direction, sae, alpha)
+    if method in ("sae_emd", "sae_clamp"):
+        raise NotImplementedError(
+            f"intervene.method={method!r} needs a per-feature selection step "
+            "(see archive/old-prototype/sae_muc/build_intervention_config_v2.py); "
+            "this lands in a follow-up commit."
+        )
+    raise NotImplementedError(f"Unknown intervene.method={method!r}")
+
+
 def run(ctx: PipelineContext) -> list[str]:
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
 
-    if cfg.method != "linear_vuf":
+    # Method validity is enforced inside _build_hook_dispatch; this catches
+    # the unimplemented SAE variants early with a clear message.
+    if cfg.method in ("sae_emd", "sae_clamp"):
         raise NotImplementedError(
             f"intervene.method={cfg.method!r} is not implemented yet. "
-            "Only 'linear_vuf' is supported; SAE methods land in a follow-up."
+            "Use 'linear_vuf' or 'sae_projected' for now."
         )
 
     vuf_meta = ctx.store.load_parquet("vuf/meta.parquet")
@@ -78,7 +127,7 @@ def run(ctx: PipelineContext) -> list[str]:
 
     outputs: list[str] = []
     for alpha in cfg.alpha_grid:
-        hook = _build_hook(direction, alpha)
+        hook = _build_hook_dispatch(cfg.method, direction, alpha)
 
         greedy = ctx.llm.generate_with_hook(
             prompts,

@@ -148,17 +148,44 @@ def test_intervene_auto_layer_picks_middle(fake_ctx):
     assert (meta["layer"] == 2).all()  # 4 layers → middle index 2
 
 
-def test_intervene_rejects_unknown_method(fake_ctx):
+def test_intervene_rejects_unimplemented_sae_methods(fake_ctx):
     prepare.run(fake_ctx)
     generate.run(fake_ctx)
     hidden_states.run(fake_ctx)
     _seed_vuf_artefacts(fake_ctx)
+    for method in ("sae_emd", "sae_clamp"):
+        new_cfg = fake_ctx.cfg.model_copy(
+            update={
+                "stages": fake_ctx.cfg.stages.model_copy(
+                    update={
+                        "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                            update={"method": method},
+                        ),
+                    }
+                )
+            }
+        )
+        object.__setattr__(fake_ctx, "cfg", new_cfg)
+        with pytest.raises(NotImplementedError, match=method):
+            intervene.run(fake_ctx)
+
+
+def test_intervene_sae_projected_runs_end_to_end(fake_ctx):
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, d_model=8)
+
     new_cfg = fake_ctx.cfg.model_copy(
         update={
             "stages": fake_ctx.cfg.stages.model_copy(
                 update={
                     "intervene": fake_ctx.cfg.stages.intervene.model_copy(
-                        update={"method": "sae_emd"},
+                        update={
+                            "method": "sae_projected",
+                            "alpha_grid": [-1.0, 1.0],
+                            "layer": 1,
+                        }
                     ),
                 }
             )
@@ -166,5 +193,36 @@ def test_intervene_rejects_unknown_method(fake_ctx):
     )
     object.__setattr__(fake_ctx, "cfg", new_cfg)
 
-    with pytest.raises(NotImplementedError, match="sae_emd"):
-        intervene.run(fake_ctx)
+    outputs = intervene.run(fake_ctx)
+    for alpha in (-1.0, 1.0):
+        assert f"intervention/alpha_{alpha:+.2f}/generations.parquet" in outputs
+    meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    assert (meta["method"] == "sae_projected").all()
+
+    # Different alphas should still yield distinct outputs via the hook probe.
+    neg = fake_ctx.store.load_parquet("intervention/alpha_-1.00/generations.parquet")
+    pos = fake_ctx.store.load_parquet("intervention/alpha_+1.00/generations.parquet")
+    assert not (neg["text"].tolist() == pos["text"].tolist())
+
+
+def test_sae_projected_hook_preserves_shape_and_changes_output():
+    from sae_muc.models.sae import FakeSAEBackend
+    from sae_muc.pipeline.intervene import _build_sae_projected_hook
+
+    direction = torch.randn(8)
+    sae = FakeSAEBackend(d_in=8)
+    hook_zero = _build_sae_projected_hook(direction, sae, alpha=0.0)
+    hook_one = _build_sae_projected_hook(direction, sae, alpha=1.0)
+
+    residual = torch.randn(2, 3, 8)
+    out_zero = hook_zero(residual)
+    out_one = hook_one(residual)
+
+    # Shape and dtype preserved.
+    assert out_zero.shape == residual.shape
+    assert out_one.shape == residual.shape
+    # α=0 → identity up to the SAE's own error round-trip (which the hook
+    # undoes by adding `err`), so out_zero ≈ residual.
+    assert torch.allclose(out_zero, residual, atol=1e-5)
+    # α=1 → output actually differs from residual.
+    assert not torch.allclose(out_one, residual, atol=1e-3)
