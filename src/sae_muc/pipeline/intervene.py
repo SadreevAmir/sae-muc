@@ -1,23 +1,30 @@
 """intervene: forward-hook VUF intervention on the residual stream.
 
-Fixed-α sweep. For each α in `cfg.stages.intervene.alpha_grid`, add
-    α * r_VU^(l)    at layer l = cfg.stages.intervene.layer
-to the residual stream of every token, then generate answers with the
-same shape the `generate` stage produces (one greedy at T=low plus N
-samples at T=high).
+Two modes (selected via `cfg.stages.intervene.mode`):
 
-Per-α generations land in
-    intervention/alpha_{a:+.2f}/generations.parquet
-Summary meta (alphas, paths, layer, method) in intervention/meta.parquet.
+* **fixed**: for each α in `alpha_grid`, add α·r_VU^(l) at layer l to every
+  token, generate answers with the usual greedy+samples protocol. Per-α
+  generations land in `intervention/alpha_{a:+.2f}/generations.parquet`.
+  This is the paper's Fig.5/6 ablation sweep.
 
-Adaptive α(x) mode (Eq. 5–6) and SAE-based interventions land in
-separate follow-up commits.
+* **adaptive** (Mechanistic Uncertainty Calibration, paper §4.2):
+  per-question α_su(x) = clip(SU_norm(x) − VU(x), 0, α_max)
+  where SU_norm is min-max normalised semantic entropy over the run and
+  VU is the mean judge VU over the N sampled answers. We loop prompts
+  one at a time, build a constant-α hook with that question's α, run the
+  same greedy+samples pair. Output:
+    intervention/adaptive/generations.parquet  — rows carry per-question α
+    intervention/adaptive/alphas.parquet       — per-question (vu, se,
+                                                 su_norm, alpha)
+
+Summary meta (paths, layer, method, mode) in `intervention/meta.parquet`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
@@ -27,6 +34,7 @@ if TYPE_CHECKING:
     import torch
 
 OUTPUT_META = "intervention/meta.parquet"
+ADAPTIVE_DIR = "intervention/adaptive"
 
 
 def _alpha_dir(alpha: float) -> str:
@@ -102,12 +110,168 @@ def _build_hook_dispatch(method: str, direction: "torch.Tensor", alpha: float):
     raise NotImplementedError(f"Unknown intervene.method={method!r}")
 
 
-def run(ctx: PipelineContext) -> list[str]:
+def _compute_adaptive_alphas(
+    ctx: PipelineContext,
+    sample_ids: list[str],
+    alpha_max: float,
+) -> pd.DataFrame:
+    """Per-question α via Eq. 6: α = clip(SU_norm(x) − VU(x), 0, α_max).
+
+    Returns a DataFrame in `sample_ids` order with columns
+    (sample_id, vu, se, su_norm, alpha).
+    """
+    judge = ctx.store.load_parquet("judge_scores.parquet")
+    vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
+    se = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")[
+        "semantic_entropy"
+    ]
+
+    su = np.asarray([float(se.loc[sid]) for sid in sample_ids], dtype=float)
+    vu = np.asarray([float(vu_per_q.loc[sid]) for sid in sample_ids], dtype=float)
+
+    su_min, su_max = float(su.min()), float(su.max())
+    su_range = max(su_max - su_min, 1e-8)
+    su_norm = (su - su_min) / su_range  # 0..1
+
+    alpha = np.clip(su_norm - vu, 0.0, float(alpha_max))
+    return pd.DataFrame(
+        {
+            "sample_id": sample_ids,
+            "vu": vu,
+            "se": su,
+            "su_norm": su_norm,
+            "alpha": alpha,
+        }
+    )
+
+
+def _run_fixed(
+    ctx: PipelineContext,
+    prompts: list[str],
+    sample_ids: list[str],
+    direction: "torch.Tensor",
+    target_layer: int,
+) -> list[str]:
+    cfg = ctx.cfg.stages.intervene
+    gen_cfg = ctx.cfg.stages.generate
+    outputs: list[str] = []
+    for alpha in cfg.alpha_grid:
+        hook = _build_hook_dispatch(cfg.method, direction, alpha)
+        greedy = ctx.llm.generate_with_hook(
+            prompts, hook_layer=target_layer, hook_fn=hook,
+            temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
+        )
+        sampled = ctx.llm.generate_with_hook(
+            prompts, hook_layer=target_layer, hook_fn=hook,
+            temperature=gen_cfg.temperature_high, max_new_tokens=gen_cfg.max_new_tokens,
+            n=gen_cfg.n_samples,
+        )
+        rows = _rows_for_generations(sample_ids, greedy, sampled, alpha=float(alpha))
+        path = f"{_alpha_dir(alpha)}/generations.parquet"
+        ctx.store.save_parquet(path, pd.DataFrame(rows))
+        outputs.append(path)
+
+    meta = pd.DataFrame(
+        {
+            "alpha": [float(a) for a in cfg.alpha_grid],
+            "path": [f"{_alpha_dir(a)}/generations.parquet" for a in cfg.alpha_grid],
+            "layer": [target_layer] * len(cfg.alpha_grid),
+            "method": [cfg.method] * len(cfg.alpha_grid),
+            "mode": ["fixed"] * len(cfg.alpha_grid),
+        }
+    )
+    ctx.store.save_parquet(OUTPUT_META, meta)
+    outputs.append(OUTPUT_META)
+    return outputs
+
+
+def _run_adaptive(
+    ctx: PipelineContext,
+    prompts: list[str],
+    sample_ids: list[str],
+    direction: "torch.Tensor",
+    target_layer: int,
+) -> list[str]:
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
 
-    # Method validity is enforced inside _build_hook_dispatch; this catches
-    # the unimplemented SAE variants early with a clear message.
+    alphas_df = _compute_adaptive_alphas(ctx, sample_ids, cfg.alpha_max)
+    ctx.store.save_parquet(f"{ADAPTIVE_DIR}/alphas.parquet", alphas_df)
+
+    # One prompt at a time: build a constant-α hook with that question's α and
+    # run the greedy + sampled generate pair. Slower than batching, but keeps
+    # the hook code dead-simple and side-steps per-sequence α bookkeeping
+    # across num_return_sequences replication. Batched per-sample α is in TODO.
+    rows: list[dict] = []
+    for i, (sid, prompt) in enumerate(zip(sample_ids, prompts, strict=True)):
+        alpha_i = float(alphas_df.iloc[i]["alpha"])
+        hook = _build_hook_dispatch(cfg.method, direction, alpha_i)
+
+        greedy_i = ctx.llm.generate_with_hook(
+            [prompt], hook_layer=target_layer, hook_fn=hook,
+            temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
+        )
+        sampled_i = ctx.llm.generate_with_hook(
+            [prompt], hook_layer=target_layer, hook_fn=hook,
+            temperature=gen_cfg.temperature_high, max_new_tokens=gen_cfg.max_new_tokens,
+            n=gen_cfg.n_samples,
+        )
+        rows.extend(
+            _rows_for_generations([sid], greedy_i, sampled_i, alpha=alpha_i)
+        )
+
+    gen_path = f"{ADAPTIVE_DIR}/generations.parquet"
+    ctx.store.save_parquet(gen_path, pd.DataFrame(rows))
+
+    meta = pd.DataFrame(
+        [
+            {
+                "alpha": None,
+                "path": gen_path,
+                "layer": target_layer,
+                "method": cfg.method,
+                "mode": "adaptive",
+                "mean_alpha": float(alphas_df["alpha"].mean()),
+                "min_alpha": float(alphas_df["alpha"].min()),
+                "max_alpha": float(alphas_df["alpha"].max()),
+                "alpha_max": float(cfg.alpha_max),
+            }
+        ]
+    )
+    ctx.store.save_parquet(OUTPUT_META, meta)
+    return [f"{ADAPTIVE_DIR}/alphas.parquet", gen_path, OUTPUT_META]
+
+
+def _rows_for_generations(sample_ids, greedy, sampled, *, alpha: float) -> list[dict]:
+    rows: list[dict] = []
+    for sid, g_list, s_list in zip(sample_ids, greedy, sampled, strict=True):
+        rows.append(
+            {
+                "sample_id": sid,
+                "alpha": float(alpha),
+                "kind": "greedy",
+                "gen_idx": 0,
+                "text": g_list[0].text,
+                "finish_reason": g_list[0].finish_reason,
+            }
+        )
+        for j, gen in enumerate(s_list):
+            rows.append(
+                {
+                    "sample_id": sid,
+                    "alpha": float(alpha),
+                    "kind": "sample",
+                    "gen_idx": j,
+                    "text": gen.text,
+                    "finish_reason": gen.finish_reason,
+                }
+            )
+    return rows
+
+
+def run(ctx: PipelineContext) -> list[str]:
+    cfg = ctx.cfg.stages.intervene
+
     if cfg.method in ("sae_emd", "sae_clamp"):
         raise NotImplementedError(
             f"intervene.method={cfg.method!r} is not implemented yet. "
@@ -123,66 +287,9 @@ def run(ctx: PipelineContext) -> list[str]:
     )["direction"]
 
     samples = ctx.store.load_parquet("samples.parquet")
+    sample_ids = list(samples["sample_id"])
     prompts = [format_answer_prompt(q, eliciting=True) for q in samples["question"]]
 
-    outputs: list[str] = []
-    for alpha in cfg.alpha_grid:
-        hook = _build_hook_dispatch(cfg.method, direction, alpha)
-
-        greedy = ctx.llm.generate_with_hook(
-            prompts,
-            hook_layer=target_layer,
-            hook_fn=hook,
-            temperature=gen_cfg.temperature_low,
-            max_new_tokens=gen_cfg.max_new_tokens,
-            n=1,
-        )
-        sampled = ctx.llm.generate_with_hook(
-            prompts,
-            hook_layer=target_layer,
-            hook_fn=hook,
-            temperature=gen_cfg.temperature_high,
-            max_new_tokens=gen_cfg.max_new_tokens,
-            n=gen_cfg.n_samples,
-        )
-
-        rows: list[dict] = []
-        for sid, g_list, s_list in zip(
-            samples["sample_id"], greedy, sampled, strict=True
-        ):
-            rows.append(
-                {
-                    "sample_id": sid,
-                    "alpha": float(alpha),
-                    "kind": "greedy",
-                    "gen_idx": 0,
-                    "text": g_list[0].text,
-                    "finish_reason": g_list[0].finish_reason,
-                }
-            )
-            for j, gen in enumerate(s_list):
-                rows.append(
-                    {
-                        "sample_id": sid,
-                        "alpha": float(alpha),
-                        "kind": "sample",
-                        "gen_idx": j,
-                        "text": gen.text,
-                        "finish_reason": gen.finish_reason,
-                    }
-                )
-        path = f"{_alpha_dir(alpha)}/generations.parquet"
-        ctx.store.save_parquet(path, pd.DataFrame(rows))
-        outputs.append(path)
-
-    meta = pd.DataFrame(
-        {
-            "alpha": [float(a) for a in cfg.alpha_grid],
-            "path": [f"{_alpha_dir(a)}/generations.parquet" for a in cfg.alpha_grid],
-            "layer": [target_layer] * len(cfg.alpha_grid),
-            "method": [cfg.method] * len(cfg.alpha_grid),
-        }
-    )
-    ctx.store.save_parquet(OUTPUT_META, meta)
-    outputs.append(OUTPUT_META)
-    return outputs
+    if cfg.mode == "adaptive":
+        return _run_adaptive(ctx, prompts, sample_ids, direction, target_layer)
+    return _run_fixed(ctx, prompts, sample_ids, direction, target_layer)

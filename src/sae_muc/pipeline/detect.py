@@ -3,14 +3,17 @@
 Input artefacts (all produced by earlier stages):
   - generations.parquet  — greedy answer per sample
   - accuracy.parquet     — is_correct from LLM-as-judge
-  - judge_scores.parquet — VU per sampled answer
+  - judge_scores.parquet — VU per generation (greedy + samples)
   - semantic_entropy.parquet — SE per question
 
 For each question we compute:
-  - vu  = mean judge VU over the N high-T samples (§2.2)
-  - se  = semantic entropy of the N samples
-  - is_refusal   — pattern match on the greedy answer
-  - is_hallucinated = (not is_correct) AND (not is_refusal)
+  - vu        = mean judge VU over the N high-T samples (§2.2)
+  - vu_greedy = judge VU on the greedy answer
+  - se        = semantic entropy of the N samples
+  - is_refusal       = vu_greedy ≥ cfg.stages.detect.refusal_vu_threshold
+                       (paper §3.2: refusal classification is derived from the
+                       judge's own VU score, not a regex list)
+  - is_hallucinated  = (not is_correct) AND (not is_refusal)
 
 The trainable set drops refusals and any sample with a missing label. We
 do an 80/20 stratified split (seeded via cfg.seed) and fit three logistic
@@ -37,26 +40,6 @@ log = logging.getLogger(__name__)
 OUTPUT_PRED = "detection.parquet"
 OUTPUT_METRICS = "detection_metrics.json"
 
-_REFUSAL_PATTERNS = (
-    "i don't know",
-    "i dont know",
-    "i do not know",
-    "i am not sure",
-    "i'm not sure",
-    "not sure about",
-    "cannot answer",
-    "can't answer",
-    "unable to",
-    "no information",
-    "i am unable",
-    "i'm unable",
-)
-
-
-def is_refusal(text: str) -> bool:
-    t = text.lower()
-    return any(p in t for p in _REFUSAL_PATTERNS)
-
 
 def _score(y_true: np.ndarray, y_prob: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     try:
@@ -74,13 +57,17 @@ def _build_feature_frame(ctx: PipelineContext) -> pd.DataFrame:
     se = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")
 
     vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
+    vu_greedy_per_q = (
+        judge[judge["kind"] == "greedy"].set_index("sample_id")["vu_score"]
+    )
+    refusal_threshold = float(ctx.cfg.stages.detect.refusal_vu_threshold)
 
     rows: list[dict[str, Any]] = []
     for sid in greedy.index:
         if sid not in vu_per_q.index or sid not in se.index:
             continue
-        greedy_text = greedy.loc[sid, "text"]
-        refusal = is_refusal(greedy_text)
+        vu_g = vu_greedy_per_q.get(sid)
+        refusal = (vu_g is not None) and pd.notna(vu_g) and (float(vu_g) >= refusal_threshold)
         correct_raw = accuracy.loc[sid, "is_correct"] if sid in accuracy.index else None
         is_correct = bool(correct_raw) if pd.notna(correct_raw) else None
         if is_correct is None:
@@ -91,11 +78,12 @@ def _build_feature_frame(ctx: PipelineContext) -> pd.DataFrame:
             {
                 "sample_id": sid,
                 "vu": float(vu_per_q.loc[sid]),
+                "vu_greedy": float(vu_g) if (vu_g is not None and pd.notna(vu_g)) else float("nan"),
                 "se": float(se.loc[sid, "semantic_entropy"]),
                 "is_correct": is_correct,
-                "is_refusal": refusal,
+                "is_refusal": bool(refusal),
                 "is_hallucinated": hall,
-                "greedy_text": greedy_text,
+                "greedy_text": greedy.loc[sid, "text"],
             }
         )
     return pd.DataFrame(rows)
@@ -153,6 +141,19 @@ def run(ctx: PipelineContext) -> list[str]:
 
     y = trainable["is_hallucinated"].astype(int).values
     idx_train, idx_test = _split(y, seed=int(ctx.cfg.seed))
+
+    # Even after a stratified split, a tiny imbalanced dataset can leave a
+    # fold with a single class — LogisticRegression refuses to fit in that
+    # case. Detect that and skip gracefully.
+    if len(np.unique(y[idx_train])) < 2:
+        log.warning(
+            "detect: train split has a single class (train=%d/%d, classes=%s); skipping fit",
+            len(idx_train), len(y), sorted(set(y[idx_train].tolist())),
+        )
+        metrics["skipped"] = "single_class_in_train_split"
+        ctx.store.save_parquet(OUTPUT_PRED, df)
+        ctx.store.save_json(OUTPUT_METRICS, metrics)
+        return [OUTPUT_PRED, OUTPUT_METRICS]
 
     for name, cols in _FEATURE_SPEC:
         X = trainable[cols].values

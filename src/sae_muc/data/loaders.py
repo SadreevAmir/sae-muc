@@ -82,7 +82,10 @@ def _load_fake(cfg: DatasetConfig) -> list[Sample]:
     answer is the same number written out — good enough to exercise the
     full pipeline on fakes without any external state.
     """
-    _WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+    _WORDS = [
+        "zero", "one", "two", "three", "four",
+        "five", "six", "seven", "eight", "nine",
+    ]
     samples: list[Sample] = []
     for i in range(cfg.n_samples):
         num = (cfg.seed + i) % len(_WORDS)

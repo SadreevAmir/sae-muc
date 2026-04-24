@@ -42,30 +42,39 @@ def run(ctx: PipelineContext) -> list[str]:
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
     gens = ctx.store.load_parquet("generations.parquet")
 
-    prompts: list[str] = []
-    for _, row in gens.iterrows():
-        question = samples.loc[row["sample_id"], "question"]
-        prompts.append(format_vu_judge_prompt(question=question, answer=row["text"]))
-
-    responses = ctx.judge.generate(
-        prompts,
-        temperature=0.1,
-        max_new_tokens=16,
-        n=1,
-    )
-
     rows: list[dict] = []
     unparsed = 0
-    for (_, gen_row), resp in zip(gens.iterrows(), responses, strict=True):
-        text = resp[0].text
-        d = parse_decisiveness(text)
-        if d is None:
-            unparsed += 1
+    errored = 0
+    for _, gen_row in gens.iterrows():
+        question = samples.loc[gen_row["sample_id"], "question"]
+        prompt = format_vu_judge_prompt(question=question, answer=gen_row["text"])
+
+        # Per-prompt isolation: a flaky judge provider shouldn't kill the stage.
+        try:
+            resp = ctx.judge.generate(
+                [prompt],
+                temperature=0.1,
+                max_new_tokens=16,
+                n=1,
+            )
+            text = resp[0][0].text
+            d = parse_decisiveness(text)
+            if d is None:
+                unparsed += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "judge: giving up on sample_id=%s gen_idx=%d after retries: %s: %s",
+                gen_row["sample_id"], int(gen_row["gen_idx"]), type(e).__name__, e,
+            )
+            text = f"ERROR: {type(e).__name__}: {e}"
+            d = None
+            errored += 1
+
         rows.append(
             {
                 "sample_id": gen_row["sample_id"],
                 "kind": gen_row["kind"],
-                "gen_idx": gen_row["gen_idx"],
+                "gen_idx": int(gen_row["gen_idx"]),
                 "decisiveness": d,
                 "vu_score": (1.0 - d) if d is not None else None,
                 "raw": text,
@@ -74,6 +83,8 @@ def run(ctx: PipelineContext) -> list[str]:
 
     if unparsed:
         log.warning("judge: %d/%d responses were unparseable", unparsed, len(rows))
+    if errored:
+        log.warning("judge: %d/%d responses errored after retries", errored, len(rows))
 
     ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
     return [OUTPUT]

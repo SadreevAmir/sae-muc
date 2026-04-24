@@ -52,38 +52,43 @@ def run(ctx: PipelineContext) -> list[str]:
     gens = ctx.store.load_parquet("generations.parquet")
     greedy = gens[gens["kind"] == "greedy"]
 
-    prompts: list[str] = []
-    sample_ids: list[str] = []
+    rows: list[dict] = []
+    unparsed = 0
+    errored = 0
     for _, row in greedy.iterrows():
         sid = row["sample_id"]
         sample_row = samples.loc[sid]
-        prompts.append(
-            format_accuracy_judge_prompt(
-                question=sample_row["question"],
-                golden_answers=list(sample_row["gold_answers"]),
-                answer=row["text"],
-            )
+        prompt = format_accuracy_judge_prompt(
+            question=sample_row["question"],
+            golden_answers=list(sample_row["gold_answers"]),
+            answer=row["text"],
         )
-        sample_ids.append(sid)
+        try:
+            resp = ctx.judge.generate(
+                [prompt],
+                temperature=0.1,
+                max_new_tokens=8,
+                n=1,
+            )
+            raw = resp[0][0].text
+            is_correct = parse_yes_no(raw)
+            if is_correct is None:
+                unparsed += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "accuracy_judge: giving up on sample_id=%s after retries: %s: %s",
+                sid, type(e).__name__, e,
+            )
+            raw = f"ERROR: {type(e).__name__}: {e}"
+            is_correct = None
+            errored += 1
 
-    responses = ctx.judge.generate(
-        prompts,
-        temperature=0.1,
-        max_new_tokens=8,
-        n=1,
-    )
-
-    rows: list[dict] = []
-    unparsed = 0
-    for sid, resp in zip(sample_ids, responses, strict=True):
-        raw = resp[0].text
-        is_correct = parse_yes_no(raw)
-        if is_correct is None:
-            unparsed += 1
         rows.append({"sample_id": sid, "is_correct": is_correct, "raw": raw})
 
     if unparsed:
         log.warning("accuracy_judge: %d/%d responses were unparseable", unparsed, len(rows))
+    if errored:
+        log.warning("accuracy_judge: %d/%d responses errored after retries", errored, len(rows))
 
     ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
     return [OUTPUT]

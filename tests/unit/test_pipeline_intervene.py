@@ -205,6 +205,114 @@ def test_intervene_sae_projected_runs_end_to_end(fake_ctx):
     assert not (neg["text"].tolist() == pos["text"].tolist())
 
 
+def test_adaptive_alpha_math():
+    """α(x) = clip(SU_norm(x) − VU(x), 0, α_max). Hand-trace on 3 samples."""
+    import pandas as pd
+
+    from sae_muc.pipeline.intervene import _compute_adaptive_alphas
+
+    # Build a mock ctx with just the two parquets we need.
+    class _FakeStore:
+        def __init__(self, tables):
+            self._tables = tables
+        def load_parquet(self, name):
+            return self._tables[name]
+
+    class _FakeCtx:
+        def __init__(self, tables):
+            self.store = _FakeStore(tables)
+
+    judge_rows = []
+    for sid, vu in [("a", 0.0), ("b", 0.5), ("c", 1.0)]:
+        for j in range(2):
+            judge_rows.append(
+                {"sample_id": sid, "kind": "sample", "gen_idx": j, "vu_score": vu}
+            )
+    se_rows = [
+        {"sample_id": "a", "semantic_entropy": 0.0},  # su_norm = 0
+        {"sample_id": "b", "semantic_entropy": 1.0},  # su_norm = 0.5
+        {"sample_id": "c", "semantic_entropy": 2.0},  # su_norm = 1.0
+    ]
+    ctx = _FakeCtx({
+        "judge_scores.parquet": pd.DataFrame(judge_rows),
+        "semantic_entropy.parquet": pd.DataFrame(se_rows),
+    })
+
+    df = _compute_adaptive_alphas(ctx, ["a", "b", "c"], alpha_max=0.5)
+
+    # su_norm = [0.0, 0.5, 1.0]; vu = [0.0, 0.5, 1.0]; diff = [0, 0, 0] → clipped 0.
+    # Sanity: SU_norm=0, VU=0 → α=0. SU_norm=0.5, VU=0.5 → 0. SU_norm=1, VU=1 → 0.
+    assert list(df["alpha"]) == [0.0, 0.0, 0.0]
+
+    # Second case: vu much lower than su — α should take positive values, capped.
+    judge_rows_low_vu = [
+        {"sample_id": sid, "kind": "sample", "gen_idx": 0, "vu_score": 0.0}
+        for sid in ("a", "b", "c")
+    ]
+    ctx2 = _FakeCtx({
+        "judge_scores.parquet": pd.DataFrame(judge_rows_low_vu),
+        "semantic_entropy.parquet": pd.DataFrame(se_rows),
+    })
+    df2 = _compute_adaptive_alphas(ctx2, ["a", "b", "c"], alpha_max=0.5)
+    # su_norm = [0, 0.5, 1.0]; vu = [0, 0, 0]; diff = [0, 0.5, 1.0]; clip(_, 0, 0.5) → [0, 0.5, 0.5].
+    assert list(df2["alpha"]) == pytest.approx([0.0, 0.5, 0.5])
+
+
+def test_intervene_adaptive_writes_expected_files(fake_ctx):
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    # Seed judge_scores + semantic_entropy the adaptive branch needs. The
+    # values don't matter for file layout, only for α computation, which is
+    # already covered by test_adaptive_alpha_math.
+    samples = fake_ctx.store.load_parquet("samples.parquet")
+    judge_rows = []
+    for sid in samples["sample_id"]:
+        for j in range(3):
+            judge_rows.append(
+                {"sample_id": sid, "kind": "sample", "gen_idx": j,
+                 "decisiveness": 0.5, "vu_score": 0.5, "raw": "0.5"}
+            )
+    fake_ctx.store.save_parquet("judge_scores.parquet", pd.DataFrame(judge_rows))
+    fake_ctx.store.save_parquet(
+        "semantic_entropy.parquet",
+        pd.DataFrame({
+            "sample_id": list(samples["sample_id"]),
+            "semantic_entropy": [0.5] * len(samples),
+            "n_clusters": [2] * len(samples),
+            "n_samples": [3] * len(samples),
+        }),
+    )
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=(0, 1, 2), d_model=8)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"mode": "adaptive", "alpha_max": 0.5, "layer": 1},
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    outputs = intervene.run(fake_ctx)
+    assert "intervention/adaptive/alphas.parquet" in outputs
+    assert "intervention/adaptive/generations.parquet" in outputs
+    assert "intervention/meta.parquet" in outputs
+
+    alphas_df = fake_ctx.store.load_parquet("intervention/adaptive/alphas.parquet")
+    assert set(alphas_df.columns) >= {"sample_id", "vu", "se", "su_norm", "alpha"}
+    assert (alphas_df["alpha"] >= 0).all()
+    assert (alphas_df["alpha"] <= 0.5).all()
+
+    meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    assert list(meta["mode"]) == ["adaptive"]
+    assert meta.iloc[0]["alpha_max"] == 0.5
+
+
 def test_sae_projected_hook_preserves_shape_and_changes_output():
     from sae_muc.models.sae import FakeSAEBackend
     from sae_muc.pipeline.intervene import _build_sae_projected_hook

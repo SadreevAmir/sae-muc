@@ -120,8 +120,16 @@ def _seed_evaluate_artefacts(fake_ctx):
         ),
     )
 
+    # Judge scores: greedy VU selects refusals (q4 is the refusal → greedy_vu 0.95),
+    # sampled VU stands in for the model's hedging on the N samples.
     judge_rows = []
+    greedy_vus = {"q0": 0.2, "q1": 0.2, "q2": 0.2, "q3": 0.2, "q4": 0.95, "q5": 0.2}
     for sid, vu in [("q0", 0.9), ("q1", 0.8), ("q2", 0.2), ("q3", 0.3), ("q4", 0.9), ("q5", 0.2)]:
+        judge_rows.append(
+            {"sample_id": sid, "kind": "greedy", "gen_idx": 0,
+             "decisiveness": 1.0 - greedy_vus[sid], "vu_score": greedy_vus[sid],
+             "raw": str(greedy_vus[sid])}
+        )
         for j in range(3):
             judge_rows.append(
                 {"sample_id": sid, "kind": "sample", "gen_idx": j,

@@ -5,26 +5,6 @@ import pandas as pd
 import pytest
 
 from sae_muc.pipeline import detect
-from sae_muc.pipeline.detect import is_refusal
-
-
-# ------------- refusal heuristic ----------------
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("I don't know.", True),
-        ("I am not sure what you mean.", True),
-        ("unable to verify", True),
-        ("I cannot answer that", True),
-        ("Paris.", False),
-        ("The 29th largest city is Bournemouth.", False),
-        ("", False),
-    ],
-)
-def test_is_refusal(text, expected):
-    assert is_refusal(text) is expected
 
 
 # ------------- stage with hand-crafted artefacts ----------------
@@ -39,9 +19,9 @@ def _seed_detect_artefacts(
 ) -> None:
     """Populate the artefacts detect.run() needs with a well-defined labelling.
 
-    First `n_hallucinated` samples are labelled hallucinated (high VU / SE);
-    the next `n - n_hallucinated - n_refusal` are correct (low VU / SE);
-    the last `n_refusal` samples carry an "I don't know" greedy answer.
+    First `n_hallucinated` samples are labelled hallucinated (low sample VU);
+    the next `n - n_hallucinated - n_refusal` are correct (high sample VU);
+    the last `n_refusal` samples have greedy VU ≥ refusal_vu_threshold (0.85).
     """
     sample_ids = [f"q{i}" for i in range(n)]
 
@@ -54,14 +34,13 @@ def _seed_detect_artefacts(
     )
     fake_ctx.store.save_parquet("samples.parquet", samples)
 
-    # Greedy generations + sampled rows for the judge.
     gen_rows = []
     accuracy_rows = []
     for i, sid in enumerate(sample_ids):
         is_hallucinated = i < n_hallucinated
         is_ref = i >= n - n_refusal
         if is_ref:
-            greedy_text = "I don't know."
+            greedy_text = "(refusal)"
             is_correct = False  # arbitrary — refusals are dropped downstream
         elif is_hallucinated:
             greedy_text = "wrong answer"
@@ -77,15 +56,23 @@ def _seed_detect_artefacts(
     fake_ctx.store.save_parquet("generations.parquet", pd.DataFrame(gen_rows))
     fake_ctx.store.save_parquet("accuracy.parquet", pd.DataFrame(accuracy_rows))
 
-    # Judge scores — 3 samples per question. Hallucinated → low VU (confident);
-    # correct → high VU (hedged). This way (vu, se) separate the classes.
+    # Judge scores:
+    #  - greedy VU: 0.95 for refusal, 0.2 otherwise (below 0.85 threshold)
+    #  - sample VU: 0.1 for hallucinated, 0.9 for correct (separates classes
+    #    for the LR detector training)
     judge_rows = []
     for i, sid in enumerate(sample_ids):
-        vu = 0.1 if i < n_hallucinated else 0.9
+        is_ref = i >= n - n_refusal
+        greedy_vu = 0.95 if is_ref else 0.2
+        judge_rows.append(
+            {"sample_id": sid, "kind": "greedy", "gen_idx": 0,
+             "decisiveness": 1.0 - greedy_vu, "vu_score": greedy_vu, "raw": str(greedy_vu)}
+        )
+        sample_vu = 0.1 if i < n_hallucinated else 0.9
         for j in range(3):
             judge_rows.append(
                 {"sample_id": sid, "kind": "sample", "gen_idx": j,
-                 "decisiveness": 1.0 - vu, "vu_score": vu, "raw": str(vu)}
+                 "decisiveness": 1.0 - sample_vu, "vu_score": sample_vu, "raw": str(sample_vu)}
             )
     fake_ctx.store.save_parquet("judge_scores.parquet", pd.DataFrame(judge_rows))
 

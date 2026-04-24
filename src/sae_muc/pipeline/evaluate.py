@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 
 from sae_muc.pipeline.context import PipelineContext
-from sae_muc.pipeline.detect import is_refusal
 
 OUTPUT = "metrics.json"
 
@@ -50,6 +49,10 @@ def _build_frame(ctx: PipelineContext) -> pd.DataFrame:
     judge = ctx.store.load_parquet("judge_scores.parquet")
     se = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")
     vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
+    vu_greedy_per_q = (
+        judge[judge["kind"] == "greedy"].set_index("sample_id")["vu_score"]
+    )
+    refusal_threshold = float(ctx.cfg.stages.detect.refusal_vu_threshold)
 
     rows: list[dict] = []
     for sid in greedy.index:
@@ -57,15 +60,15 @@ def _build_frame(ctx: PipelineContext) -> pd.DataFrame:
             continue
         correct_raw = accuracy.loc[sid, "is_correct"] if sid in accuracy.index else None
         is_correct = bool(correct_raw) if pd.notna(correct_raw) else None
-        greedy_text = greedy.loc[sid, "text"]
-        refusal = is_refusal(greedy_text)
+        vu_g = vu_greedy_per_q.get(sid)
+        refusal = (vu_g is not None) and pd.notna(vu_g) and (float(vu_g) >= refusal_threshold)
         rows.append(
             {
                 "sample_id": sid,
                 "vu": float(vu_per_q.loc[sid]),
                 "se": float(se.loc[sid, "semantic_entropy"]),
                 "is_correct": is_correct,
-                "is_refusal": refusal,
+                "is_refusal": bool(refusal),
             }
         )
     return pd.DataFrame(rows)

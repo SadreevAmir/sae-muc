@@ -1,6 +1,6 @@
 # Smoke test: tiny local LLM (Qwen2.5-0.5B-Instruct) driving the full pipeline
-# on 5 synthetic samples, judged by Llama-3.1-70B via OpenRouter, SE via a
-# small DeBERTa NLI. Requires OPENROUTER_API_KEY in .env.
+# on 5 synthetic samples, judged by Qwen-2.5-72B via OpenRouter (Alibaba-hosted,
+# not US-routed), SE via a small DeBERTa NLI. Requires OPENROUTER_API_KEY in .env.
 #
 # Run from the repo root (venv activated):
 #   sae-muc run --config configs/experiment/qwen05b_smoke.yaml
@@ -14,13 +14,14 @@ model:
   dtype: float32
 
 dataset:
-  name: fake
-  n_samples: 5
+  name: nq_open
+  split: validation
+  n_samples: 10
   seed: 0
 
 judge:
   provider: openrouter
-  model: meta-llama/llama-3.1-70b-instruct
+  model: qwen/qwen-2.5-72b-instruct
   max_retries: 3
 
 nli:
@@ -40,8 +41,9 @@ stages:
     pooling: last_token_q
   intervene:
     method: linear_vuf
-    alpha_grid: [-1.0, 0.0, 1.0]
+    mode: adaptive           # paper §4.2 Eq.5-6; per-question α_su(x)
+    alpha_grid: [-1.0, 0.0, 1.0]  # ignored when mode=adaptive
     alpha_max: 1.0
-    layer: auto       # middle of the layer range
+    layer: auto              # middle of the layer range
 
 seed: 42

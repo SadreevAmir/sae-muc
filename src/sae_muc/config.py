@@ -34,7 +34,7 @@ class DatasetConfig(_Frozen):
 
 
 class JudgeConfig(_Frozen):
-    provider: Literal["openrouter", "fake"]
+    provider: Literal["openrouter", "cherryin", "fake"]
     model: str
     max_retries: int = 3
 
@@ -60,15 +60,29 @@ class VUFStage(_Frozen):
 
 class InterveneStage(_Frozen):
     method: Literal["linear_vuf", "sae_emd", "sae_projected", "sae_clamp"] = "linear_vuf"
+    # fixed: iterate alpha_grid, same α for every question (paper Fig.5/6 ablation).
+    # adaptive: per-question α_su(x) = clip(SU_norm(x) − VU(x), 0, alpha_max),
+    #           paper §4.2 Eq.5–6; this is the MUC intervention proper.
+    mode: Literal["fixed", "adaptive"] = "fixed"
     alpha_grid: list[float] = Field(default_factory=lambda: [-1.0, -0.5, 0.0, 0.5, 1.0])
     alpha_max: float = 1.0
     layer: int | Literal["auto"] = "auto"
+
+
+class DetectStage(_Frozen):
+    # Refusal is classified from the judge's VU on the greedy answer
+    # (paper §3.2: "we categorize the samples ... based on the VU level
+    # of the most likely answer"). A greedy answer with VU ≥ threshold is
+    # considered a refusal/abstention and excluded from hallucination
+    # training.
+    refusal_vu_threshold: float = 0.85
 
 
 class StagesConfig(_Frozen):
     generate: GenerateStage = GenerateStage()
     vuf: VUFStage = VUFStage()
     intervene: InterveneStage = InterveneStage()
+    detect: DetectStage = DetectStage()
 
 
 class ExperimentConfig(_Frozen):
