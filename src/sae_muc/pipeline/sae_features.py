@@ -30,6 +30,13 @@ log = logging.getLogger(__name__)
 
 OUTPUT = "sae_features/stats.parquet"
 
+# The SAE feature analysis is only required by interventions that consume
+# the (uncertainty / certainty) feature-index lists. For linear_vuf and
+# sae_projected we skip the stage entirely — running it would do two
+# useless things: burn an SAE forward pass and potentially blow up on a
+# dim mismatch between the (default) FakeSAE and a real model's d_model.
+_SAE_METHODS_REQUIRING_FEATURES = ("sae_emd", "sae_clamp")
+
 
 def _cohens_d(f_u: "torch.Tensor", f_c: "torch.Tensor") -> "torch.Tensor":
     """Per-feature Cohen's d between two groups. Pooled std with unbiased var.
@@ -56,6 +63,13 @@ def run(ctx: PipelineContext) -> list[str]:
     intervene_cfg = ctx.cfg.stages.intervene
     vuf_cfg = ctx.cfg.stages.vuf
     sae_feat_cfg = ctx.cfg.stages.sae_features
+
+    if intervene_cfg.method not in _SAE_METHODS_REQUIRING_FEATURES:
+        log.info(
+            "sae_features: skipped (intervene.method=%s does not consume SAE feature lists)",
+            intervene_cfg.method,
+        )
+        return []
 
     splits = ctx.store.load_parquet("vuf/splits.parquet")
     uncertain_ids = splits[splits["split"] == "uncertain"]["sample_id"].tolist()

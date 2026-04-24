@@ -87,7 +87,7 @@ def _seed_sae_features_inputs(fake_ctx):
 
 
 def test_sae_features_selects_k_top_from_each_tail(fake_ctx):
-    # Narrow intervene.layer to 1 and k_top to 3 so the assertion is exact.
+    # Must request an SAE method so the stage actually runs.
     new_cfg = fake_ctx.cfg.model_copy(
         update={
             "stages": fake_ctx.cfg.stages.model_copy(
@@ -96,7 +96,7 @@ def test_sae_features_selects_k_top_from_each_tail(fake_ctx):
                         update={"k_top": 3}
                     ),
                     "intervene": fake_ctx.cfg.stages.intervene.model_copy(
-                        update={"layer": 1}
+                        update={"layer": 1, "method": "sae_emd"}
                     ),
                 }
             )
@@ -164,7 +164,9 @@ def test_sae_features_warns_on_tiny_splits(fake_ctx, caplog):
         update={
             "stages": fake_ctx.cfg.stages.model_copy(
                 update={
-                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(update={"layer": 1}),
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"layer": 1, "method": "sae_emd"}
+                    ),
                 }
             )
         }
@@ -174,3 +176,14 @@ def test_sae_features_warns_on_tiny_splits(fake_ctx, caplog):
     caplog.set_level(logging.WARNING, logger="sae_muc.pipeline.sae_features")
     sae_features.run(fake_ctx)
     assert any("tiny splits" in r.getMessage() for r in caplog.records)
+
+
+def test_sae_features_skipped_for_non_sae_methods(fake_ctx, caplog):
+    """When intervene.method is linear_vuf / sae_projected, the stage must no-op."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="sae_muc.pipeline.sae_features")
+    # fake_cfg defaults to method=linear_vuf → the stage must early-return.
+    outputs = sae_features.run(fake_ctx)
+    assert outputs == []
+    assert any("skipped" in r.getMessage() for r in caplog.records)
