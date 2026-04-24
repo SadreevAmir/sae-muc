@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from sae_muc.artifacts import StageManifest
 from sae_muc.pipeline import (
     accuracy_judge,
+    detect,
     generate,
     hidden_states,
     judge,
@@ -30,7 +31,8 @@ STAGES: dict[str, StageFn] = {
     "semantic_entropy": semantic_entropy.run,
     "hidden_states": hidden_states.run,
     "vuf": vuf.run,
-    # detect / intervene / evaluate land in upcoming commits.
+    "detect": detect.run,
+    # intervene / evaluate land in upcoming commits.
 }
 
 
