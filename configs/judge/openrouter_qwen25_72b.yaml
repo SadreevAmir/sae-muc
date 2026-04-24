@@ -1,0 +1,6 @@
+# Qwen-2.5-72B via OpenRouter — Alibaba-hosted, geo-accessible where Meta
+# endpoints are blocked. Strong instruction-following, ~$0.3/M tokens.
+# Our most-used judge in smoke runs.
+provider: openrouter
+model: qwen/qwen-2.5-72b-instruct
+max_retries: 3

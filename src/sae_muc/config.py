@@ -129,20 +129,59 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+# Fields that can be set to a string path pointing at a standalone YAML
+# fragment (e.g. `model: ../model/mistral7b.yaml`). The loader replaces the
+# string with the file's content before validation. Inline dicts and/or
+# extends-based merging are unaffected.
+_REFERENCE_SECTIONS: tuple[str, ...] = ("model", "dataset", "judge", "nli")
+
+
 def load_yaml_with_extends(path: Path) -> dict[str, Any]:
-    """Load a YAML file; if it has `extends: <relative-path>`, merge the parent first."""
+    """Load a YAML file; resolve `extends:` and string-valued section refs.
+
+    `extends:` may be a single relative path (str) or a list of paths,
+    resolved in order with later entries overriding earlier ones. The
+    current file's keys override the merged `extends:` result.
+
+    After the extends merge, any field in `_REFERENCE_SECTIONS` whose value
+    is still a string is interpreted as a relative path to a YAML fragment
+    and loaded in place. Inline dict values pass through unchanged.
+    """
     path = Path(path).resolve()
     with path.open() as f:
         raw = yaml.safe_load(f) or {}
+
     extends = raw.pop("extends", None)
-    if extends is None:
-        return raw
-    parent_path = (path.parent / extends).resolve()
-    parent = load_yaml_with_extends(parent_path)
-    return _deep_merge(parent, raw)
+    if extends is not None:
+        if isinstance(extends, str):
+            extends_list = [extends]
+        elif isinstance(extends, list):
+            extends_list = list(extends)
+        else:
+            raise TypeError(
+                f"`extends:` must be a string or list of strings, "
+                f"got {type(extends).__name__}"
+            )
+        merged: dict[str, Any] = {}
+        for ext in extends_list:
+            if not isinstance(ext, str):
+                raise TypeError(f"`extends:` entries must be strings, got {ext!r}")
+            parent_path = (path.parent / ext).resolve()
+            parent = load_yaml_with_extends(parent_path)
+            merged = _deep_merge(merged, parent)
+        raw = _deep_merge(merged, raw)
+
+    for section in _REFERENCE_SECTIONS:
+        val = raw.get(section)
+        if isinstance(val, str):
+            ref_path = (path.parent / val).resolve()
+            with ref_path.open() as f:
+                raw[section] = yaml.safe_load(f) or {}
+
+    return raw
 
 
 def load_experiment_config(path: str | Path) -> ExperimentConfig:
-    """Load a YAML config file, resolve `extends:`, validate into ExperimentConfig."""
+    """Load a YAML config file, resolve `extends:`/refs, validate into ExperimentConfig."""
     raw = load_yaml_with_extends(Path(path))
     return ExperimentConfig.model_validate(raw)

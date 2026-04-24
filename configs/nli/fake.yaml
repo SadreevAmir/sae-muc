@@ -1,0 +1,3 @@
+# FakeNLIBackend — equality on normalised strings. Tests and offline smoke.
+provider: fake
+model: fake-nli

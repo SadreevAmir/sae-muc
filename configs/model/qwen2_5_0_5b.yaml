@@ -1,0 +1,4 @@
+# Tiny Qwen for Mac/CPU smoke tests. dtype=float32 because MPS bf16 is flaky.
+provider: hf_local
+name: Qwen/Qwen2.5-0.5B-Instruct
+dtype: float32

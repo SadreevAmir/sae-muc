@@ -1,0 +1,5 @@
+# ~1.5 GB NLI classifier (paper default for semantic-entropy clustering).
+# Higher quality than v3-base but much slower to download and run. Use for
+# final replication runs; smoke can stay on v3-base.
+provider: hf_local
+model: microsoft/deberta-v2-xxlarge-mnli

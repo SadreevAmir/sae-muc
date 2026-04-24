@@ -1,0 +1,33 @@
+# Paper-scale run: Qwen2.5-7B × TriviaQA × Llama-3.1-70B judge.
+# Use on the server with CUDA; n_samples=1000 matches paper eval set size.
+
+extends: ../base.yaml
+
+model: ../model/qwen2_5_7b.yaml
+judge: ../judge/openrouter_llama31_70b.yaml
+nli: ../nli/deberta_v2_xxlarge.yaml
+
+dataset:
+  name: triviaqa
+  split: validation
+  n_samples: 1000
+  seed: 42
+
+stages:
+  generate:
+    n_samples: 10           # paper default
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 100
+  vuf:
+    layers: auto
+    n_top: 250              # paper default
+    n_bot: 250
+    pooling: last_token_q
+  intervene:
+    method: linear_vuf
+    mode: adaptive
+    alpha_max: 1.0
+    layer: auto
+
+seed: 42

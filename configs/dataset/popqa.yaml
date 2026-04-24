@@ -1,0 +1,5 @@
+# PopQA (akariasai/PopQA). Paper uses 1k test.
+name: popqa
+split: test
+n_samples: 500
+seed: 42

@@ -1,0 +1,4 @@
+# ~180 MB DeBERTa-v3 NLI classifier trained on MNLI + FEVER + ANLI.
+# Label order: entailment=0, neutral=1, contradiction=2. Our smoke default.
+provider: hf_local
+model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli

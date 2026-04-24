@@ -1,32 +1,21 @@
-# Smoke test: tiny local LLM (Qwen2.5-0.5B-Instruct) driving the full pipeline
-# on 5 synthetic samples, judged by Qwen-2.5-72B via OpenRouter (Alibaba-hosted,
-# not US-routed), SE via a small DeBERTa NLI. Requires OPENROUTER_API_KEY in .env.
+# Smoke test: local Qwen2.5-0.5B driving the full pipeline on 10 NQ-Open
+# questions, judged by Qwen-2.5-72B via OpenRouter, SE via DeBERTa-v3-base NLI.
+# Requires OPENROUTER_API_KEY in .env.
 #
-# Run from the repo root (venv activated):
-#   sae-muc run --config configs/experiment/qwen05b_smoke.yaml
+# Run:  uv run sae-muc run --config configs/experiment/qwen05b_smoke.yaml
 
 extends: ../base.yaml
 
-model:
-  provider: hf_local
-  name: Qwen/Qwen2.5-0.5B-Instruct
-  # float32 on MPS/CPU — bfloat16 is flaky on Apple Silicon.
-  dtype: float32
+model: ../model/qwen2_5_0_5b.yaml
+judge: ../judge/openrouter_qwen25_72b.yaml
+nli: ../nli/deberta_v3_base.yaml
 
+# Dataset inline because n_samples=10 for smoke is tiny vs nq_open.yaml's 500.
 dataset:
   name: nq_open
   split: validation
   n_samples: 10
   seed: 0
-
-judge:
-  provider: openrouter
-  model: qwen/qwen-2.5-72b-instruct
-  max_retries: 3
-
-nli:
-  provider: hf_local
-  model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
 
 stages:
   generate:
@@ -35,15 +24,15 @@ stages:
     temperature_high: 1.0
     max_new_tokens: 40
   vuf:
-    layers: auto      # every transformer layer
+    layers: auto
     n_top: 2
     n_bot: 2
     pooling: last_token_q
   intervene:
     method: linear_vuf
-    mode: adaptive           # paper §4.2 Eq.5-6; per-question α_su(x)
+    mode: adaptive           # paper §4.2 Eq.5-6
     alpha_grid: [-1.0, 0.0, 1.0]  # ignored when mode=adaptive
     alpha_max: 1.0
-    layer: auto              # middle of the layer range
+    layer: auto
 
 seed: 42

@@ -131,3 +131,113 @@ def test_load_experiment_config_end_to_end(tmp_path):
     assert cfg.seed == 7
     assert cfg.dataset.n_samples == 20
     assert cfg.stages.generate.n_samples == 5
+
+
+def test_extends_accepts_list(tmp_path):
+    _write(
+        tmp_path / "a.yaml",
+        """
+        seed: 1
+        stages:
+          generate: {n_samples: 10}
+        """,
+    )
+    _write(
+        tmp_path / "b.yaml",
+        """
+        seed: 2
+        stages:
+          generate: {temperature_high: 0.9}
+        """,
+    )
+    cfg_path = _write(
+        tmp_path / "exp.yaml",
+        """
+        extends: [a.yaml, b.yaml]
+        model: {provider: fake, name: x}
+        dataset: {name: nq_open}
+        judge: {provider: fake, model: j}
+        """,
+    )
+    cfg = load_experiment_config(cfg_path)
+    # Later entries override earlier ones; exp yaml itself overrides both.
+    assert cfg.seed == 2
+    assert cfg.stages.generate.n_samples == 10
+    assert cfg.stages.generate.temperature_high == 0.9
+
+
+def test_string_section_ref_resolves_to_file(tmp_path):
+    _write(
+        tmp_path / "model_fake.yaml",
+        """
+        provider: fake
+        name: referenced-model
+        """,
+    )
+    _write(
+        tmp_path / "dataset_fake.yaml",
+        """
+        name: nq_open
+        split: validation
+        n_samples: 42
+        """,
+    )
+    _write(
+        tmp_path / "judge_fake.yaml",
+        """
+        provider: fake
+        model: referenced-judge
+        """,
+    )
+    _write(
+        tmp_path / "nli_fake.yaml",
+        """
+        provider: fake
+        model: referenced-nli
+        """,
+    )
+    cfg_path = _write(
+        tmp_path / "exp.yaml",
+        """
+        model: model_fake.yaml
+        dataset: dataset_fake.yaml
+        judge: judge_fake.yaml
+        nli: nli_fake.yaml
+        """,
+    )
+    cfg = load_experiment_config(cfg_path)
+    assert cfg.model.name == "referenced-model"
+    assert cfg.dataset.n_samples == 42
+    assert cfg.judge.model == "referenced-judge"
+    assert cfg.nli.model == "referenced-nli"
+
+
+def test_inline_dict_still_works_alongside_refs(tmp_path):
+    _write(
+        tmp_path / "model_fake.yaml",
+        """
+        provider: fake
+        name: from-file
+        """,
+    )
+    cfg_path = _write(
+        tmp_path / "exp.yaml",
+        """
+        model: model_fake.yaml
+        dataset: {name: nq_open, n_samples: 5}
+        judge: {provider: fake, model: inline}
+        """,
+    )
+    cfg = load_experiment_config(cfg_path)
+    assert cfg.model.name == "from-file"
+    assert cfg.dataset.n_samples == 5
+    assert cfg.judge.model == "inline"
+
+
+def test_shipped_smoke_configs_validate():
+    """The YAMLs we ship in configs/experiment/ must all parse."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    for path in sorted((repo_root / "configs/experiment").glob("*.yaml")):
+        load_experiment_config(path)

@@ -1,0 +1,18 @@
+# All-fake pipeline — no network, no HF downloads, no tokens. Produces
+# artefacts fast for sanity-checking changes end-to-end. Used by the
+# integration test fixture too (via inline config, but this file is the
+# canonical example).
+
+extends: ../base.yaml
+
+model: ../model/fake.yaml
+dataset: ../dataset/fake.yaml
+judge: ../judge/fake.yaml
+nli: ../nli/fake.yaml
+
+stages:
+  generate: {n_samples: 3, max_new_tokens: 16}
+  vuf: {n_top: 2, n_bot: 2, pooling: last_token_q}
+  intervene: {method: linear_vuf, mode: fixed, alpha_grid: [0.0, 1.0]}
+
+seed: 42

@@ -1,0 +1,6 @@
+# Paper-default judge (Ji et al. 2025 use Llama-3.1-70B-Instruct). Requires
+# OPENROUTER_API_KEY in .env and may be blocked from some regions; fall back
+# to openrouter_qwen25_72b.yaml or cherryin_qwen35_flash.yaml.
+provider: openrouter
+model: meta-llama/llama-3.1-70b-instruct
+max_retries: 3
