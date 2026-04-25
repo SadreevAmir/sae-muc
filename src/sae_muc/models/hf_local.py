@@ -79,6 +79,7 @@ class HFLocalBackend:
         max_new_tokens: int,
         n: int = 1,
         system: str | None = None,
+        seed: int | None = None,
     ) -> list[list[Generation]]:
         import torch
 
@@ -102,6 +103,11 @@ class HFLocalBackend:
         if do_sample:
             gen_kwargs["temperature"] = temperature
 
+        # Re-seed torch's global RNG before each sampled .generate() so that
+        # the same (cfg.seed, prompt, n) yields the same sample set across
+        # runs and across before/after intervention sweeps. No-op for greedy.
+        if seed is not None and do_sample:
+            torch.manual_seed(int(seed))
         with torch.inference_mode():
             out = self._model.generate(**inputs, **gen_kwargs)
 
@@ -172,6 +178,7 @@ class HFLocalBackend:
         max_new_tokens: int,
         n: int = 1,
         system: str | None = None,
+        seed: int | None = None,
     ) -> list[list[Generation]]:
         """Same as `generate` but with `hook_fn` applied at `hook_layer`'s residual stream.
 
@@ -214,6 +221,8 @@ class HFLocalBackend:
         target = self._model.model.layers[hook_layer]
         handle = target.register_forward_hook(_wrapped)
         try:
+            if seed is not None and do_sample:
+                torch.manual_seed(int(seed))
             with torch.inference_mode():
                 out = self._model.generate(**inputs, **gen_kwargs)
         finally:

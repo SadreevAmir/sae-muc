@@ -46,8 +46,9 @@ class FakeBackend:
         max_new_tokens: int,
         n: int = 1,
         system: str | None = None,
+        seed: int | None = None,
     ) -> list[list[Generation]]:
-        _ = max_new_tokens, system  # unused; kept for interface parity
+        _ = max_new_tokens, system, seed  # unused; kept for interface parity
         out: list[list[Generation]] = []
         for prompt in prompts:
             per_prompt: list[Generation] = []
@@ -105,6 +106,7 @@ class FakeBackend:
         max_new_tokens: int,
         n: int = 1,
         system: str | None = None,
+        seed: int | None = None,
     ) -> list[list[Generation]]:
         """Probe `hook_fn` to derive a perturbation signature, then generate
         with the signature baked into the prompt so different hooks produce
@@ -112,7 +114,7 @@ class FakeBackend:
         """
         import torch
 
-        _ = hook_layer, system
+        _ = hook_layer, system, seed
         probe = torch.ones(1, 1, self._D_MODEL)
         perturbed = hook_fn(probe)
         alpha_hint = float((perturbed - probe).sum().item())

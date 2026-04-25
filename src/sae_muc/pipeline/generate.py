@@ -36,12 +36,14 @@ def run(ctx: PipelineContext) -> list[str]:
         temperature=stage_cfg.temperature_low,
         max_new_tokens=stage_cfg.max_new_tokens,
         n=1,
+        seed=ctx.cfg.seed,
     )
     sampled = ctx.llm.generate(
         prompts,
         temperature=stage_cfg.temperature_high,
         max_new_tokens=stage_cfg.max_new_tokens,
         n=stage_cfg.n_samples,
+        seed=ctx.cfg.seed,
     )
 
     rows: list[dict] = []

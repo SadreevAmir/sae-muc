@@ -245,11 +245,12 @@ def _run_fixed(
         greedy = ctx.llm.generate_with_hook(
             prompts, hook_layer=target_layer, hook_fn=hook,
             temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
+            seed=ctx.cfg.seed,
         )
         sampled = ctx.llm.generate_with_hook(
             prompts, hook_layer=target_layer, hook_fn=hook,
             temperature=gen_cfg.temperature_high, max_new_tokens=gen_cfg.max_new_tokens,
-            n=gen_cfg.n_samples,
+            n=gen_cfg.n_samples, seed=ctx.cfg.seed,
         )
         rows = _rows_for_generations(sample_ids, greedy, sampled, alpha=float(alpha))
         path = f"{_alpha_dir(alpha)}/generations.parquet"
@@ -304,11 +305,12 @@ def _run_adaptive(
         greedy_i = ctx.llm.generate_with_hook(
             [prompt], hook_layer=target_layer, hook_fn=hook,
             temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
+            seed=ctx.cfg.seed,
         )
         sampled_i = ctx.llm.generate_with_hook(
             [prompt], hook_layer=target_layer, hook_fn=hook,
             temperature=gen_cfg.temperature_high, max_new_tokens=gen_cfg.max_new_tokens,
-            n=gen_cfg.n_samples,
+            n=gen_cfg.n_samples, seed=ctx.cfg.seed,
         )
         rows.extend(
             _rows_for_generations([sid], greedy_i, sampled_i, alpha=alpha_i)

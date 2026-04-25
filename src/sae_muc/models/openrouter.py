@@ -41,7 +41,9 @@ class OpenRouterBackend:
         max_new_tokens: int,
         n: int = 1,
         system: str | None = None,
+        seed: int | None = None,
     ) -> list[list[Generation]]:
+        _ = seed  # remote API: randomness is server-side, ignore the seed
         out: list[list[Generation]] = []
         for prompt in prompts:
             messages: list[dict[str, str]] = []

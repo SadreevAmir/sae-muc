@@ -29,11 +29,16 @@ class LLMBackend(Protocol):
         max_new_tokens: int,
         n: int = 1,
         system: str | None = None,
+        seed: int | None = None,
     ) -> list[list[Generation]]:
         """Produce n completions per prompt.
 
         Returns a list of length `len(prompts)`; each element is a list of
         length `n` of `Generation` objects (outer dimension = prompts,
         inner = samples per prompt).
+
+        `seed` is honoured only by backends whose RNG is reachable from the
+        caller (HF local). Remote APIs (OpenRouter/CherryIn) ignore it; their
+        randomness lives server-side.
         """
         ...
