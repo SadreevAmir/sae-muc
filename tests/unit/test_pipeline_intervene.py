@@ -568,6 +568,55 @@ def test_intervene_adaptive_writes_expected_files(fake_ctx):
     assert meta.iloc[0]["alpha_max"] == 0.5
 
 
+def test_skip_decode_step_passes_through_seq_len_1():
+    """P1: with apply_during_generation=False, hook is bypassed for seq_len==1."""
+    from sae_muc.pipeline.intervene import _skip_decode_step
+
+    inner = _build_hook(torch.tensor([1.0, 0.0, 0.0, 0.0]), alpha=0.5)
+    wrapped = _skip_decode_step(inner)
+
+    # seq_len == 1 → identity.
+    decode_step = torch.zeros(2, 1, 4)
+    assert torch.equal(wrapped(decode_step), decode_step)
+    # seq_len > 1 → unchanged from inner hook.
+    prefill = torch.zeros(2, 5, 4)
+    expected = inner(prefill)
+    assert torch.equal(wrapped(prefill), expected)
+
+
+def test_intervene_apply_during_generation_false_silences_fakebackend_probe(fake_ctx):
+    """P1 stage-level: with apply_during_generation=False, the FakeBackend
+    probe (single token) sees no perturbation, so different α produce
+    identical outputs."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=(0, 1, 2), d_model=8)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={
+                            "alpha_grid": [-1.0, 1.0],
+                            "layer": 1,
+                            "apply_during_generation": False,
+                        },
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    intervene.run(fake_ctx)
+    neg = fake_ctx.store.load_parquet("intervention/alpha_-1.00/generations.parquet")
+    pos = fake_ctx.store.load_parquet("intervention/alpha_+1.00/generations.parquet")
+    # FakeBackend's probe is [1,1,D] → wrapped hook returns identity → no
+    # alpha hint baked into the prompt → outputs match across α.
+    assert neg["text"].tolist() == pos["text"].tolist()
+
+
 def test_sae_emd_cohen_d_delta_is_l2_normalised():
     """S1: cohen_d-weighted δ collapses to L2 norm 1 across selected features."""
     from sae_muc.models.sae import FakeSAEBackend

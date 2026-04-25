@@ -265,6 +265,21 @@ def _load_sae_feature_stats(
     return out
 
 
+def _skip_decode_step(hook_fn):
+    """P1 wrapper: pass through residual untouched when seq_len == 1.
+
+    Autoregressive .generate() forwards one token at a time after prefill;
+    the residual then has shape [B, 1, D]. Old_prototype's
+    apply_during_generation=False mode kept the steering on prefill only,
+    matching the original Fig.5/6 ablation set-up.
+    """
+    def wrapped(residual):
+        if residual.shape[1] == 1:
+            return residual
+        return hook_fn(residual)
+    return wrapped
+
+
 def _build_per_layer_hooks(
     ctx: PipelineContext,
     layers: list[int],
@@ -279,11 +294,14 @@ def _build_per_layer_hooks(
     hooks: dict[int, callable] = {}
     for layer in layers:
         layer_stats = per_layer[layer] if per_layer is not None else None
-        hooks[layer] = _build_hook_dispatch(
+        hook_fn = _build_hook_dispatch(
             cfg.method, directions[layer], alpha, ctx.sae,
             layer_stats=layer_stats,
             sae_emd_delta=cfg.sae_emd_delta,
         )
+        if not cfg.apply_during_generation:
+            hook_fn = _skip_decode_step(hook_fn)
+        hooks[layer] = hook_fn
     return hooks
 
 

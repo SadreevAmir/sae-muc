@@ -104,6 +104,12 @@ class InterveneStage(_Frozen):
     #                (paper-faithful per old prototype build_intervention_config_v2).
     #   "multihot" — δ[i] = +1 for uncertainty, -1 for certainty (uniform shift).
     sae_emd_delta: Literal["cohen_d", "multihot"] = "cohen_d"
+    # When False, the hook only fires during prefill (seq_len > 1) and is
+    # skipped on each autoregressive decode step (seq_len == 1). Matches
+    # old_prototype hooks.py:apply_during_generation. Paper §4.2 says
+    # "all tokens in detected hallucinated responses", so True is the
+    # paper-faithful default; False is for back-compat with old experiments.
+    apply_during_generation: bool = True
     # Detector gating (paper §4.2: "we modulate the influence of these
     # features through linear interventions on all tokens in detected
     # hallucinated responses"). When True, the adaptive run reads
