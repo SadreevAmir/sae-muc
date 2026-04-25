@@ -15,6 +15,10 @@ Thresholds come from `cfg.stages.evaluate.{vu_threshold,su_threshold}` with
 reasonable defaults (VU=0.5, SU=median). Post-intervention metrics (per α)
 require re-running judge/semantic_entropy/accuracy_judge on the intervened
 generations; that chain is deferred — see TODO.md.
+
+Refusal classification reuses `cfg.stages.detect.refusal_vu_threshold`
+(default 0.85 — OUR calibration, not paper). Numbers under a non-paper
+threshold are not directly comparable to Tab.3.
 """
 
 from __future__ import annotations

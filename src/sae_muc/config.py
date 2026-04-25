@@ -78,6 +78,11 @@ class DetectStage(_Frozen):
     # of the most likely answer"). A greedy answer with VU ≥ threshold is
     # considered a refusal/abstention and excluded from hallucination
     # training.
+    #
+    # Paper note: §3.2 introduces the categorisation but does not pin down
+    # a specific cut-off value. 0.85 is OUR calibration default — Tab.3-style
+    # numbers under this threshold are not directly comparable to the paper.
+    # Override per experiment via YAML (`stages.detect.refusal_vu_threshold`).
     refusal_vu_threshold: float = 0.85
 
 

@@ -12,7 +12,9 @@ For each question we compute:
   - se        = semantic entropy of the N samples
   - is_refusal       = vu_greedy ≥ cfg.stages.detect.refusal_vu_threshold
                        (paper §3.2: refusal classification is derived from the
-                       judge's own VU score, not a regex list)
+                       judge's own VU score, not a regex list. The threshold
+                       value itself — default 0.85 — is OUR calibration: the
+                       paper does not pin a specific cut-off.)
   - is_hallucinated  = (not is_correct) AND (not is_refusal)
 
 The trainable set drops refusals and any sample with a missing label. We
