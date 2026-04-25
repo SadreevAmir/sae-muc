@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import torch
+
 from sae_muc.pipeline import detect
 
 
@@ -137,6 +139,121 @@ def test_detect_handles_insufficient_data(fake_ctx):
     df = fake_ctx.store.load_parquet("detection.parquet")
     for name in ("verbal", "semantic", "combined"):
         assert df[f"prob_hallucinate_{name}"].isna().all()
+
+
+def _seed_hidden_state_artefacts(fake_ctx, *, n: int, n_hallucinated: int, layer: int = 1):
+    """Add vuf/meta + hidden_states/layer_X tensors, with a separable signal."""
+    fake_ctx.store.save_parquet(
+        "vuf/meta.parquet",
+        pd.DataFrame(
+            {
+                "layer": [0, 1, 2],
+                "path": [f"vuf/direction_layer_{l}.safetensors" for l in (0, 1, 2)],
+                "raw_norm": [1.0] * 3,
+                "n_uncertain": [n_hallucinated] * 3,
+                "n_certain": [n - n_hallucinated] * 3,
+                "pooling": ["last_token_q"] * 3,
+            }
+        ),
+    )
+    fake_ctx.store.save_parquet(
+        "hidden_states/meta.parquet",
+        pd.DataFrame(
+            {
+                "sample_id": [f"q{i}" for i in range(n)],
+                "seq_len": [5] * n,
+                "question_len": [3] * n,
+                "n_layers": [3] * n,
+                "answer_len": [2] * n,
+            }
+        ),
+    )
+    tensors: dict[str, torch.Tensor] = {}
+    for i in range(n):
+        hs = torch.zeros(5, 8)
+        # Separable: hallucinated samples get +2 in dim 0, others -2.
+        hs[:, 0] = 2.0 if i < n_hallucinated else -2.0
+        tensors[f"q{i}"] = hs
+    fake_ctx.store.save_safetensors(f"hidden_states/layer_{layer}.safetensors", tensors)
+
+
+def test_detect_lr_hidden_method_adds_hidden_column(fake_ctx):
+    """C3.b: detector_method=lr_hidden trains a probe on hidden states."""
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    _seed_hidden_state_artefacts(fake_ctx, n=20, n_hallucinated=10, layer=1)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "detect": fake_ctx.cfg.stages.detect.model_copy(
+                        update={"detector_method": "lr_hidden", "detector_layer": 1}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    detect.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("detection.parquet")
+    assert df["prob_hallucinate_hidden"].notna().all()
+    metrics = fake_ctx.store.load_json("detection_metrics.json")
+    assert metrics["detector_method"] == "lr_hidden"
+    assert "hidden" in metrics
+    assert metrics["hidden"]["layer"] == 1
+    # Default gate_detector_method=auto → for lr_hidden, gate column is hidden.
+    assert metrics["gate"]["method"] == "hidden"
+
+
+def test_detect_combined_method_adds_combined_full_column(fake_ctx):
+    """C3.b: detector_method=combined adds (vu, se, hidden) full LR."""
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    _seed_hidden_state_artefacts(fake_ctx, n=20, n_hallucinated=10, layer=1)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "detect": fake_ctx.cfg.stages.detect.model_copy(
+                        update={"detector_method": "combined", "detector_layer": 1}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    detect.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("detection.parquet")
+    assert df["prob_hallucinate_hidden"].notna().all()
+    assert df["prob_hallucinate_combined_full"].notna().all()
+    metrics = fake_ctx.store.load_json("detection_metrics.json")
+    assert metrics["detector_method"] == "combined"
+    assert metrics["gate"]["method"] == "combined_full"
+
+
+def test_detect_is_at_risk_uses_threshold(fake_ctx):
+    """C3.b: is_at_risk = (prob_<gate_method> >= detector_threshold)."""
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"detector_threshold": 0.5}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    detect.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("detection.parquet")
+    # First 10 are hallucinated (clean signal) → prob >= 0.5 → at risk.
+    assert df.iloc[:10]["is_at_risk"].all()
+    # Last 10 are correct → at-risk should be False.
+    assert (~df.iloc[10:]["is_at_risk"]).all()
 
 
 def test_detect_seed_makes_split_reproducible(fake_ctx):
