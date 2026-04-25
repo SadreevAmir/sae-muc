@@ -96,9 +96,11 @@ def _compute_metrics(df: pd.DataFrame, vu_threshold: float, su_threshold: float 
 
     refusal_mask = df["is_refusal"]
     labelled = df["is_correct"].notna()
-    correct_mask = labelled & df["is_correct"].fillna(False).astype(bool) & ~refusal_mask
-    # Hallucinated = labelled as incorrect AND not a refusal.
-    hall_mask = labelled & (~df["is_correct"].fillna(True).astype(bool)) & ~refusal_mask
+    correct_mask = labelled & (df["is_correct"] == True) & ~refusal_mask  # noqa: E712
+    # Hallucinated = labelled as incorrect AND not a refusal. Use an explicit
+    # `== False` rather than `~fillna(True)`: an unparsed accuracy answer
+    # (NaN) would silently flip to False after `~`, contradicting `labelled`.
+    hall_mask = labelled & (df["is_correct"] == False) & ~refusal_mask  # noqa: E712
     confident_mask = hall_mask & (df["vu"] < vu_threshold)
 
     vu = df["vu"].to_numpy(dtype=float)
