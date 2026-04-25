@@ -51,6 +51,20 @@ class GenerateStage(_Frozen):
     max_new_tokens: int = 100
 
 
+class HiddenStatesStage(_Frozen):
+    # `full` — forward `question + greedy_answer`, store every token.
+    # `question_only` — forward only the question text (no answer).
+    #     This is enough for paper-faithful pooling=last_token_q / mean_q
+    #     and saves 2-3× memory/time vs full.
+    # `last_k_tokens` — forward full text but store only the last `last_k`
+    #     tokens. Useful when the question is long and only the tail matters
+    #     for the downstream probe. NB: if the question itself doesn't fit
+    #     into the kept tail, pooling=last_token_q will fall back to the
+    #     last *stored* token, which may belong to the answer.
+    storage: Literal["full", "question_only", "last_k_tokens"] = "full"
+    last_k: int = 8
+
+
 class VUFStage(_Frozen):
     layers: list[int] | Literal["auto"] = "auto"
     n_top: int = 250
@@ -94,6 +108,7 @@ class SAEFeaturesStage(_Frozen):
 
 class StagesConfig(_Frozen):
     generate: GenerateStage = GenerateStage()
+    hidden_states: HiddenStatesStage = HiddenStatesStage()
     vuf: VUFStage = VUFStage()
     intervene: InterveneStage = InterveneStage()
     detect: DetectStage = DetectStage()

@@ -85,6 +85,61 @@ def test_hidden_states_safetensors_shapes(fake_ctx):
         assert emb[sid].shape == (int(row["seq_len"]), 4)
 
 
+def test_hidden_states_question_only_skips_answer(fake_ctx):
+    """C7: storage=question_only forwards the question text only, so seq_len
+    equals question_len and answer_len is zero on every row."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    _install_fake_hidden_state_methods(fake_ctx.llm, d_model=4, n_hidden=3)
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "hidden_states": fake_ctx.cfg.stages.hidden_states.model_copy(
+                        update={"storage": "question_only"}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    hidden_states.run(fake_ctx)
+    meta = fake_ctx.store.load_parquet("hidden_states/meta.parquet")
+    assert (meta["seq_len"] == meta["question_len"]).all()
+    assert (meta["answer_len"] == 0).all()
+    assert (meta["storage"] == "question_only").all()
+
+
+def test_hidden_states_last_k_tokens_truncates_to_window(fake_ctx):
+    """C7: storage=last_k_tokens keeps only the trailing `last_k` tokens."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    _install_fake_hidden_state_methods(fake_ctx.llm, d_model=4, n_hidden=3)
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "hidden_states": fake_ctx.cfg.stages.hidden_states.model_copy(
+                        update={"storage": "last_k_tokens", "last_k": 4}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    hidden_states.run(fake_ctx)
+    meta = fake_ctx.store.load_parquet("hidden_states/meta.parquet")
+    layer0 = fake_ctx.store.load_safetensors("hidden_states/layer_0.safetensors")
+
+    # Every kept window has at most last_k tokens.
+    assert (meta["seq_len"] <= 4).all()
+    for sid in meta["sample_id"]:
+        assert layer0[sid].shape[0] <= 4
+    assert (meta["storage"] == "last_k_tokens").all()
+
+
 def test_hidden_states_layer_content_matches_slice(fake_ctx):
     """Layer file i should equal `hidden_list[i+1]` (embedding is layer 0 of the tuple)."""
     prepare.run(fake_ctx)
