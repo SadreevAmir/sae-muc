@@ -85,20 +85,46 @@ def _build_sae_projected_hook(direction: "torch.Tensor", sae, alpha: float):
     return hook_fn
 
 
-def _build_sae_emd_hook(uncertainty_idx, certainty_idx, sae, alpha):
+def _build_sae_emd_hook(
+    uncertainty_idx,
+    certainty_idx,
+    sae,
+    alpha,
+    *,
+    cohen_d=None,
+    delta_mode: str = "cohen_d",
+):
     """`sae_emd`: f' = f + α·δ, h' = decode(f') + err.
 
-    δ is a multi-hot vector: +1 at each uncertainty feature, -1 at each
-    certainty feature. α scales the whole shift, so α>0 increases
-    uncertainty-feature activations and decreases certainty ones.
+    δ is shaped per `delta_mode`:
+      - "multihot"  → +1 at every uncertainty feature, -1 at every certainty
+        feature. Every selected feature is pushed uniformly.
+      - "cohen_d"   → δ[i] = cohen_d[i] for both groups (positive for unc,
+        negative for cert by construction), then L2-normalised so α has a
+        comparable scale across runs (paper / old prototype default).
+
+    α>0 increases uncertainty-feature activations and decreases certainty ones.
     """
     import torch
 
     delta = torch.zeros(sae.d_latent, dtype=torch.float32)
-    for idx in uncertainty_idx:
-        delta[idx] = 1.0
-    for idx in certainty_idx:
-        delta[idx] = -1.0
+    if delta_mode == "multihot":
+        for idx in uncertainty_idx:
+            delta[idx] = 1.0
+        for idx in certainty_idx:
+            delta[idx] = -1.0
+    elif delta_mode == "cohen_d":
+        if cohen_d is None:
+            raise ValueError("delta_mode='cohen_d' needs the cohen_d mapping per feature.")
+        for idx in uncertainty_idx:
+            delta[idx] = float(cohen_d[idx])
+        for idx in certainty_idx:
+            delta[idx] = float(cohen_d[idx])
+        norm = float(delta.norm().item())
+        if norm > 1e-8:
+            delta = delta / norm
+    else:
+        raise ValueError(f"Unknown sae_emd_delta mode: {delta_mode!r}")
 
     def hook_fn(residual: "torch.Tensor") -> "torch.Tensor":
         orig_shape = residual.shape
@@ -114,15 +140,32 @@ def _build_sae_emd_hook(uncertainty_idx, certainty_idx, sae, alpha):
     return hook_fn
 
 
-def _build_sae_clamp_hook(uncertainty_idx, certainty_idx, sae, alpha, target):
-    """`sae_clamp`: set uncertainty features to α·target, certainty features to 0.
+def _build_sae_clamp_hook(
+    uncertainty_idx,
+    certainty_idx,
+    sae,
+    alpha,
+    *,
+    unc_targets,
+):
+    """`sae_clamp`: soft-push uncertainty features toward their per-feature
+    target activation; soft-suppress certainty features toward zero.
 
-    Unlike sae_emd, clamp overwrites rather than adds: the selected
-    uncertainty features are forced high, the certainty ones are
-    suppressed. α modulates the target level; target is an absolute
-    activation scale from `cfg.stages.intervene.sae_clamp_target`.
+    Per old prototype hooks._apply_sae_clamp:
+      α'      = clip(α, 0, 1)
+      f'[unc] = f[unc] + α' · max(0, target[unc] − f[unc])     (push up)
+      f'[cer] = f[cer] · (1 − α')                              (suppress)
+      h'      = decode(f') + (h − decode(f))
+
+    `unc_targets` is a Mapping[idx → mean_uncertain[idx]] derived from
+    `sae_features/stats.parquet` — one absolute target per feature.
     """
     import torch
+
+    a = float(min(max(alpha, 0.0), 1.0))
+    target_vec = torch.zeros(sae.d_latent, dtype=torch.float32)
+    for idx in uncertainty_idx:
+        target_vec[idx] = float(unc_targets[idx])
 
     def hook_fn(residual: "torch.Tensor") -> "torch.Tensor":
         orig_shape = residual.shape
@@ -132,11 +175,13 @@ def _build_sae_clamp_hook(uncertainty_idx, certainty_idx, sae, alpha, target):
         recon = sae.decode(f)
         err = flat - recon
         f_new = f.clone()
-        scaled_target = alpha * float(target)
-        for idx in uncertainty_idx:
-            f_new[..., idx] = scaled_target
-        for idx in certainty_idx:
-            f_new[..., idx] = 0.0
+        if uncertainty_idx:
+            tv = target_vec.to(f.device, dtype=f.dtype)
+            current = f_new[..., uncertainty_idx]
+            gap = torch.clamp(tv[uncertainty_idx] - current, min=0.0)
+            f_new[..., uncertainty_idx] = current + a * gap
+        if certainty_idx:
+            f_new[..., certainty_idx] = f_new[..., certainty_idx] * (1.0 - a)
         out = sae.decode(f_new) + err
         return out.to(dtype=orig_dtype).reshape(orig_shape)
 
@@ -149,39 +194,55 @@ def _build_hook_dispatch(
     alpha: float,
     sae,
     *,
-    uncertainty_idx=None,
-    certainty_idx=None,
-    clamp_target: float = 10.0,
+    layer_stats: dict | None = None,
+    sae_emd_delta: str = "cohen_d",
 ):
     if method == "linear_vuf":
         return _build_hook(direction, alpha)
     if method == "sae_projected":
         return _build_sae_projected_hook(direction, sae, alpha)
     if method == "sae_emd":
-        if uncertainty_idx is None or certainty_idx is None:
+        if layer_stats is None:
             raise ValueError(
                 "sae_emd requires `sae_features/stats.parquet` — run the "
                 "`sae_features` stage before `intervene`."
             )
-        return _build_sae_emd_hook(uncertainty_idx, certainty_idx, sae, alpha)
+        return _build_sae_emd_hook(
+            layer_stats["uncertainty_idx"],
+            layer_stats["certainty_idx"],
+            sae, alpha,
+            cohen_d=layer_stats["cohen_d"],
+            delta_mode=sae_emd_delta,
+        )
     if method == "sae_clamp":
-        if uncertainty_idx is None or certainty_idx is None:
+        if layer_stats is None:
             raise ValueError(
                 "sae_clamp requires `sae_features/stats.parquet` — run the "
                 "`sae_features` stage before `intervene`."
             )
         return _build_sae_clamp_hook(
-            uncertainty_idx, certainty_idx, sae, alpha, target=clamp_target,
+            layer_stats["uncertainty_idx"],
+            layer_stats["certainty_idx"],
+            sae, alpha,
+            unc_targets=layer_stats["mean_uncertain"],
         )
     raise NotImplementedError(f"Unknown intervene.method={method!r}")
 
 
-def _load_sae_feature_indices(
+def _load_sae_feature_stats(
     ctx: PipelineContext, layers: list[int]
-) -> dict[int, tuple[list[int], list[int]]]:
-    """For each requested layer, return (uncertainty_idx, certainty_idx)."""
+) -> dict[int, dict]:
+    """For each requested layer, return per-feature SAE stats needed by hooks.
+
+    Returned dict has keys:
+      uncertainty_idx, certainty_idx — list[int]
+      cohen_d: dict[int, float]      — cohen_d for every selected feature
+                                       (used by sae_emd's cohen_d delta).
+      mean_uncertain: dict[int, float] — per-feature target activation
+                                         (used by sae_clamp's soft-push).
+    """
     stats = ctx.store.load_parquet("sae_features/stats.parquet")
-    out: dict[int, tuple[list[int], list[int]]] = {}
+    out: dict[int, dict] = {}
     for layer in layers:
         sub = stats[stats["layer"] == layer]
         if sub.empty:
@@ -189,9 +250,18 @@ def _load_sae_feature_indices(
                 f"sae_features/stats.parquet has no rows for layer={layer}; "
                 f"available layers: {sorted(set(int(x) for x in stats['layer'].tolist()))}"
             )
-        unc = [int(x) for x in sub.loc[sub["selected_as"] == "uncertainty", "feature_id"].tolist()]
-        cer = [int(x) for x in sub.loc[sub["selected_as"] == "certainty", "feature_id"].tolist()]
-        out[layer] = (unc, cer)
+        unc_rows = sub[sub["selected_as"] == "uncertainty"]
+        cer_rows = sub[sub["selected_as"] == "certainty"]
+        unc = [int(x) for x in unc_rows["feature_id"].tolist()]
+        cer = [int(x) for x in cer_rows["feature_id"].tolist()]
+        cohen_d_map = {int(r["feature_id"]): float(r["cohen_d"]) for _, r in sub.iterrows()}
+        mean_uncertain_map = {int(r["feature_id"]): float(r["mean_uncertain"]) for _, r in sub.iterrows()}
+        out[layer] = {
+            "uncertainty_idx": unc,
+            "certainty_idx": cer,
+            "cohen_d": cohen_d_map,
+            "mean_uncertain": mean_uncertain_map,
+        }
     return out
 
 
@@ -203,18 +273,16 @@ def _build_per_layer_hooks(
 ) -> dict[int, callable]:
     """Build a `{layer: hook_fn}` mapping for the configured intervene method."""
     cfg = ctx.cfg.stages.intervene
-    if cfg.method in ("sae_emd", "sae_clamp"):
-        per_layer_idx = _load_sae_feature_indices(ctx, layers)
-    else:
-        per_layer_idx = {l: (None, None) for l in layers}
+    needs_features = cfg.method in ("sae_emd", "sae_clamp")
+    per_layer = _load_sae_feature_stats(ctx, layers) if needs_features else None
 
     hooks: dict[int, callable] = {}
     for layer in layers:
-        unc, cer = per_layer_idx[layer]
+        layer_stats = per_layer[layer] if per_layer is not None else None
         hooks[layer] = _build_hook_dispatch(
             cfg.method, directions[layer], alpha, ctx.sae,
-            uncertainty_idx=unc, certainty_idx=cer,
-            clamp_target=cfg.sae_clamp_target,
+            layer_stats=layer_stats,
+            sae_emd_delta=cfg.sae_emd_delta,
         )
     return hooks
 

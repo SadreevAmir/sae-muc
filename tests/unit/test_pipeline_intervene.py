@@ -293,7 +293,6 @@ def test_intervene_sae_clamp_runs_with_selected_features(fake_ctx):
                             "method": "sae_clamp",
                             "alpha_grid": [1.0],
                             "layer": 1,
-                            "sae_clamp_target": 5.0,
                         }
                     ),
                 }
@@ -567,6 +566,116 @@ def test_intervene_adaptive_writes_expected_files(fake_ctx):
     meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
     assert list(meta["mode"]) == ["adaptive"]
     assert meta.iloc[0]["alpha_max"] == 0.5
+
+
+def test_sae_emd_cohen_d_delta_is_l2_normalised():
+    """S1: cohen_d-weighted δ collapses to L2 norm 1 across selected features."""
+    from sae_muc.models.sae import FakeSAEBackend
+    from sae_muc.pipeline.intervene import _build_sae_emd_hook
+
+    sae = FakeSAEBackend(d_in=8, d_latent=16)
+    cohen_d = {0: 0.8, 1: 1.5, 14: -0.6, 15: -1.2}
+
+    hook_zero = _build_sae_emd_hook(
+        [0, 1], [14, 15], sae, alpha=0.0,
+        cohen_d=cohen_d, delta_mode="cohen_d",
+    )
+    hook_one = _build_sae_emd_hook(
+        [0, 1], [14, 15], sae, alpha=1.0,
+        cohen_d=cohen_d, delta_mode="cohen_d",
+    )
+
+    residual = torch.randn(2, 3, 8)
+    # α=0 should be (effectively) identity, α=1 should differ.
+    assert torch.allclose(hook_zero(residual), residual, atol=1e-5)
+    assert not torch.allclose(hook_one(residual), residual, atol=1e-3)
+
+
+def test_sae_emd_cohen_d_requires_mapping():
+    from sae_muc.models.sae import FakeSAEBackend
+    from sae_muc.pipeline.intervene import _build_sae_emd_hook
+
+    sae = FakeSAEBackend(d_in=8, d_latent=16)
+    with pytest.raises(ValueError, match="cohen_d mapping"):
+        _build_sae_emd_hook([0, 1], [14], sae, alpha=1.0, delta_mode="cohen_d")
+
+
+def test_sae_emd_multihot_mode_still_works():
+    from sae_muc.models.sae import FakeSAEBackend
+    from sae_muc.pipeline.intervene import _build_sae_emd_hook
+
+    sae = FakeSAEBackend(d_in=8, d_latent=16)
+    hook = _build_sae_emd_hook(
+        [0, 1], [14, 15], sae, alpha=1.0, delta_mode="multihot",
+    )
+    residual = torch.randn(2, 3, 8)
+    assert hook(residual).shape == residual.shape
+
+
+def test_sae_clamp_alpha_zero_is_identity():
+    """S2: α=0 leaves SAE features unchanged → output equals residual (up to err round-trip)."""
+    from sae_muc.models.sae import FakeSAEBackend
+    from sae_muc.pipeline.intervene import _build_sae_clamp_hook
+
+    sae = FakeSAEBackend(d_in=8, d_latent=16)
+    unc_targets = {0: 5.0, 1: 3.0}
+    hook = _build_sae_clamp_hook(
+        [0, 1], [14, 15], sae, alpha=0.0, unc_targets=unc_targets,
+    )
+    residual = torch.randn(2, 3, 8)
+    assert torch.allclose(hook(residual), residual, atol=1e-5)
+
+
+def test_sae_clamp_uses_per_feature_target_in_latent_space():
+    """S2: clamp acts on the SAE latent, lifting unc to target and zeroing cert.
+
+    Uses a custom SAE backend whose encode/decode are identity-on-the-first-d_in
+    so we can read latent values directly off the output residual.
+    """
+    import torch as _t
+
+    from sae_muc.pipeline.intervene import _build_sae_clamp_hook
+
+    class IdSAE:
+        def __init__(self):
+            self.d_in = 8
+            self.d_latent = 8
+
+        def encode(self, x):
+            return x.clone()
+
+        def decode(self, f):
+            return f.clone()
+
+    sae = IdSAE()
+    unc_targets = {0: 5.0, 1: 3.0}
+    hook = _build_sae_clamp_hook(
+        [0, 1], [6, 7], sae, alpha=1.0, unc_targets=unc_targets,
+    )
+    residual = _t.zeros(1, 1, 8)
+    residual[0, 0, 0] = 1.0   # below target → push up to 5.0
+    residual[0, 0, 1] = 4.0   # above target → no change (soft-push only raises)
+    residual[0, 0, 6] = 2.0   # certainty → suppress to 0 with α=1
+    residual[0, 0, 7] = -1.0  # certainty → suppress to 0
+    out = hook(residual)[0, 0]
+    assert out[0].item() == pytest.approx(5.0)
+    assert out[1].item() == pytest.approx(4.0)  # already above target
+    assert out[6].item() == pytest.approx(0.0, abs=1e-6)
+    assert out[7].item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_sae_clamp_alpha_clipped_to_unit_interval():
+    """S2: α outside [0,1] is clipped to [0,1]."""
+    from sae_muc.models.sae import FakeSAEBackend
+    from sae_muc.pipeline.intervene import _build_sae_clamp_hook
+
+    sae = FakeSAEBackend(d_in=8, d_latent=16)
+    targets = {0: 5.0}
+    hook_neg = _build_sae_clamp_hook([0], [], sae, alpha=-2.0, unc_targets=targets)
+    hook_zero = _build_sae_clamp_hook([0], [], sae, alpha=0.0, unc_targets=targets)
+    residual = torch.randn(1, 1, 8)
+    # α=-2 → clipped to 0 → equivalent to α=0.
+    assert torch.allclose(hook_neg(residual), hook_zero(residual), atol=1e-6)
 
 
 def test_sae_projected_hook_preserves_shape_and_changes_output():

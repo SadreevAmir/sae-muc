@@ -99,9 +99,11 @@ class InterveneStage(_Frozen):
     #   int           — single layer.
     #   "auto"        — middle of the available VUF layers (single layer).
     layer: int | list[int] | Literal["auto", "paper_range"] = "auto"
-    # sae_clamp only: target activation value for selected uncertainty
-    # features (certainty features are clamped to 0). α multiplies this.
-    sae_clamp_target: float = 10.0
+    # sae_emd only: how the latent shift δ is built.
+    #   "cohen_d"  — δ[i] = cohen_d[i] for selected features, then L2-normalised
+    #                (paper-faithful per old prototype build_intervention_config_v2).
+    #   "multihot" — δ[i] = +1 for uncertainty, -1 for certainty (uniform shift).
+    sae_emd_delta: Literal["cohen_d", "multihot"] = "cohen_d"
     # Detector gating (paper §4.2: "we modulate the influence of these
     # features through linear interventions on all tokens in detected
     # hallucinated responses"). When True, the adaptive run reads
