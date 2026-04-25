@@ -106,6 +106,20 @@ class SAEFeaturesStage(_Frozen):
     k_top: int = 50
 
 
+class EvaluateStage(_Frozen):
+    """Thresholds for Tab.3 metrics.
+
+    `kossen` mode (paper-faithful for the "Confident Hallucination Rate"
+    bullet): the threshold minimises `sum((value - t)**2)` over the baseline
+    distribution of values, which collapses analytically to the mean.
+    `fixed` mode uses the explicit `vu_threshold` / `su_threshold` floats.
+    """
+    vu_threshold_mode: Literal["fixed", "kossen"] = "kossen"
+    vu_threshold: float = 0.5
+    su_threshold_mode: Literal["fixed", "kossen", "median"] = "kossen"
+    su_threshold: float | None = None
+
+
 class StagesConfig(_Frozen):
     generate: GenerateStage = GenerateStage()
     hidden_states: HiddenStatesStage = HiddenStatesStage()
@@ -113,6 +127,7 @@ class StagesConfig(_Frozen):
     intervene: InterveneStage = InterveneStage()
     detect: DetectStage = DetectStage()
     sae_features: SAEFeaturesStage = SAEFeaturesStage()
+    evaluate: EvaluateStage = EvaluateStage()
 
 
 class SAEConfig(_Frozen):

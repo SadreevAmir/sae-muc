@@ -50,6 +50,14 @@ def run(ctx: PipelineContext) -> list[str]:
     before = ctx.store.load_json("metrics.json")
     comparison_rows: list[dict] = [{"variant": "before", **_flatten_metrics(before)}]
 
+    # Reuse the thresholds resolved on the baseline so before/after numbers
+    # share a comparable cut-off. Falls back to fixed (0.5 / median) only if
+    # the baseline metrics file pre-dates the EvaluateStage rollout.
+    baseline_thresholds = before.get("thresholds", {}) if isinstance(before, dict) else {}
+    vu_t = float(baseline_thresholds.get("vu", 0.5))
+    su_t_raw = baseline_thresholds.get("su")
+    su_t = float(su_t_raw) if su_t_raw is not None else None
+
     outputs: list[str] = []
     for _, row in meta.iterrows():
         src = str(row["path"])
@@ -62,7 +70,7 @@ def run(ctx: PipelineContext) -> list[str]:
             judge_path=str(variant_dir / "judge_scores.parquet"),
             se_path=str(variant_dir / "semantic_entropy.parquet"),
         )
-        m = evaluate._compute_metrics(df, vu_threshold=0.5, su_threshold=None)
+        m = evaluate._compute_metrics(df, vu_threshold=vu_t, su_threshold=su_t)
         metrics_path = str(variant_dir / "metrics.json")
         ctx.store.save_json(metrics_path, m)
         outputs.append(metrics_path)

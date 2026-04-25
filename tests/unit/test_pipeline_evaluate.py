@@ -6,7 +6,12 @@ import pandas as pd
 import pytest
 
 from sae_muc.pipeline import evaluate
-from sae_muc.pipeline.evaluate import _compute_metrics, _pearson
+from sae_muc.pipeline.evaluate import (
+    _compute_metrics,
+    _kossen_threshold,
+    _pearson,
+    _resolve_thresholds,
+)
 
 
 # ------------- _pearson ----------------
@@ -68,6 +73,49 @@ def test_metrics_on_mixed_set():
 def test_metrics_empty_frame():
     m = _compute_metrics(_frame([]), vu_threshold=0.5, su_threshold=1.0)
     assert m == {"n_total": 0, "empty": True}
+
+
+def test_kossen_threshold_is_mean():
+    """C6: Kossen threshold = argmin sum((v - t)**2) → mean(v)."""
+    import numpy as np
+
+    arr = np.array([0.0, 0.4, 1.0])
+    assert _kossen_threshold(arr) == pytest.approx(0.4666666666, abs=1e-6)
+
+
+def test_kossen_threshold_ignores_nan():
+    import numpy as np
+
+    arr = np.array([0.2, float("nan"), 0.6])
+    assert _kossen_threshold(arr) == pytest.approx(0.4)
+
+
+def test_resolve_thresholds_kossen_picks_mean():
+    df = _frame(
+        [
+            {"sample_id": "a", "vu": 0.0, "se": 0.0, "is_correct": True, "is_refusal": False},
+            {"sample_id": "b", "vu": 1.0, "se": 0.5, "is_correct": True, "is_refusal": False},
+        ]
+    )
+    vu_t, su_t = _resolve_thresholds(
+        df, vu_mode="kossen", vu_fallback=0.5, su_mode="kossen", su_fallback=None
+    )
+    assert vu_t == pytest.approx(0.5)
+    assert su_t == pytest.approx(0.25)
+
+
+def test_resolve_thresholds_fixed_uses_fallback():
+    df = _frame(
+        [
+            {"sample_id": "a", "vu": 0.0, "se": 0.0, "is_correct": True, "is_refusal": False},
+            {"sample_id": "b", "vu": 1.0, "se": 0.5, "is_correct": True, "is_refusal": False},
+        ]
+    )
+    vu_t, su_t = _resolve_thresholds(
+        df, vu_mode="fixed", vu_fallback=0.7, su_mode="fixed", su_fallback=0.3
+    )
+    assert vu_t == pytest.approx(0.7)
+    assert su_t == pytest.approx(0.3)
 
 
 def test_metrics_su_threshold_defaults_to_median():

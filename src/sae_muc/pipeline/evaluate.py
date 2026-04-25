@@ -11,10 +11,15 @@ Computes per-question / aggregate metrics on the baseline generations:
   * vu_correct_mean             — mean VU among correct answers
   * vu_incorrect_mean           — mean VU among incorrect answers
 
-Thresholds come from `cfg.stages.evaluate.{vu_threshold,su_threshold}` with
-reasonable defaults (VU=0.5, SU=median). Post-intervention metrics (per α)
-require re-running judge/semantic_entropy/accuracy_judge on the intervened
-generations; that chain is deferred — see TODO.md.
+Threshold modes come from `cfg.stages.evaluate`:
+  vu_threshold_mode = "kossen" | "fixed" (default kossen, paper-faithful;
+                       Kossen et al. 2024 picks t minimising
+                       sum((vu - t)**2), which collapses to mean(vu)).
+  su_threshold_mode = "kossen" | "fixed" | "median" (default kossen).
+  vu_threshold / su_threshold are the explicit values used in fixed mode.
+
+Post-intervention metrics (per α) require re-running judge / semantic_entropy
+/ accuracy_judge on the intervened generations; that chain is in evaluate_post.
 
 Refusal classification reuses `cfg.stages.detect.refusal_vu_threshold`
 (default 0.85 — OUR calibration, not paper). Numbers under a non-paper
@@ -90,6 +95,44 @@ def build_frame_from_paths(
     return pd.DataFrame(rows)
 
 
+def _kossen_threshold(values: np.ndarray) -> float:
+    """t* = argmin_t sum((value - t)**2). Closed form: t* = mean(value).
+
+    Empty input falls back to 0.0 (the metric is uncomputable; the caller
+    will have already returned the empty-frame stub above, but guard here
+    too in case someone wires this elsewhere).
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return 0.0
+    return float(arr.mean())
+
+
+def _resolve_thresholds(
+    df: pd.DataFrame,
+    *,
+    vu_mode: str,
+    vu_fallback: float,
+    su_mode: str,
+    su_fallback: float | None,
+) -> tuple[float, float]:
+    if vu_mode == "kossen":
+        vu_t = _kossen_threshold(df["vu"].to_numpy(dtype=float))
+    else:  # fixed
+        vu_t = float(vu_fallback)
+    if su_mode == "kossen":
+        su_t = _kossen_threshold(df["se"].to_numpy(dtype=float))
+    elif su_mode == "median":
+        su_t = float(df["se"].median())
+    else:  # fixed
+        if su_fallback is None:
+            su_t = float(df["se"].median())
+        else:
+            su_t = float(su_fallback)
+    return vu_t, su_t
+
+
 def _compute_metrics(df: pd.DataFrame, vu_threshold: float, su_threshold: float | None) -> dict:
     n = len(df)
     if n == 0:
@@ -150,7 +193,18 @@ def run(ctx: PipelineContext) -> list[str]:
         int(df["is_correct"].fillna(False).sum()),
         int(df["is_refusal"].sum()),
     )
-    # Default thresholds: VU 0.5 (paper-ish), SU = median (balanced split).
-    metrics = _compute_metrics(df, vu_threshold=0.5, su_threshold=None)
+    eval_cfg = ctx.cfg.stages.evaluate
+    vu_t, su_t = _resolve_thresholds(
+        df,
+        vu_mode=eval_cfg.vu_threshold_mode,
+        vu_fallback=eval_cfg.vu_threshold,
+        su_mode=eval_cfg.su_threshold_mode,
+        su_fallback=eval_cfg.su_threshold,
+    )
+    log.info(
+        "thresholds: vu_mode=%s → %.3f, su_mode=%s → %.3f",
+        eval_cfg.vu_threshold_mode, vu_t, eval_cfg.su_threshold_mode, su_t,
+    )
+    metrics = _compute_metrics(df, vu_threshold=vu_t, su_threshold=su_t)
     ctx.store.save_json(OUTPUT, metrics)
     return [OUTPUT]
