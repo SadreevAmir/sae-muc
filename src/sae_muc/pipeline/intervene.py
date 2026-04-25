@@ -310,6 +310,45 @@ def _run_fixed(
     return outputs
 
 
+def _baseline_rows_for_sid(baseline: pd.DataFrame, sid: str) -> list[dict]:
+    """Replicate the baseline generations for `sid` with alpha=0.
+
+    Used by the adaptive run when gate_by_detector flags `sid` as safe: the
+    intervention is skipped and the existing baseline rows are reused, which
+    matches old_prototype's _skip_generation behaviour.
+    """
+    sub = baseline[baseline["sample_id"] == sid]
+    out: list[dict] = []
+    for _, r in sub.iterrows():
+        out.append(
+            {
+                "sample_id": sid,
+                "alpha": 0.0,
+                "kind": str(r["kind"]),
+                "gen_idx": int(r["gen_idx"]),
+                "text": r["text"],
+                "finish_reason": r.get("finish_reason"),
+            }
+        )
+    return out
+
+
+def _load_at_risk_set(ctx: PipelineContext) -> set[str]:
+    """Read detection.parquet, return {sample_id : is_at_risk}.
+
+    Falls back to "everyone is at risk" with a warning if detection.parquet
+    is missing the column (e.g. detect stage skipped on insufficient data).
+    """
+    detection = ctx.store.load_parquet("detection.parquet")
+    if "is_at_risk" not in detection.columns:
+        log.warning(
+            "intervene: gate_by_detector=True but detection.parquet has no "
+            "is_at_risk column — treating every sample as at-risk."
+        )
+        return set(detection["sample_id"].astype(str))
+    return set(detection.loc[detection["is_at_risk"].astype(bool), "sample_id"].astype(str))
+
+
 def _run_adaptive(
     ctx: PipelineContext,
     prompts: list[str],
@@ -321,6 +360,23 @@ def _run_adaptive(
     gen_cfg = ctx.cfg.stages.generate
 
     alphas_df = _compute_adaptive_alphas(ctx, sample_ids, cfg.alpha_max)
+
+    if cfg.gate_by_detector:
+        at_risk = _load_at_risk_set(ctx)
+        # Force α=0 on the alphas frame for samples the detector flagged safe,
+        # so downstream consumers (sweeps, plots) see a faithful α distribution.
+        gate_mask = alphas_df["sample_id"].isin(at_risk).to_numpy()
+        alphas_df.loc[~gate_mask, "alpha"] = 0.0
+        log.info(
+            "gate_by_detector=True: %d/%d samples at-risk (skipping intervention "
+            "on the rest, baseline reused)",
+            int(gate_mask.sum()), len(alphas_df),
+        )
+        baseline = ctx.store.load_parquet("generations.parquet")
+    else:
+        at_risk = None
+        baseline = None
+
     ctx.store.save_parquet(f"{ADAPTIVE_DIR}/alphas.parquet", alphas_df)
 
     # One prompt at a time: build a constant-α hook with that question's α and
@@ -329,6 +385,9 @@ def _run_adaptive(
     # across num_return_sequences replication. Batched per-sample α is in TODO.
     rows: list[dict] = []
     for i, (sid, prompt) in enumerate(zip(sample_ids, prompts, strict=True)):
+        if at_risk is not None and sid not in at_risk:
+            rows.extend(_baseline_rows_for_sid(baseline, sid))
+            continue
         alpha_i = float(alphas_df.iloc[i]["alpha"])
         hooks = _build_per_layer_hooks(ctx, target_layers, directions, alpha_i)
 
@@ -413,6 +472,13 @@ def run(ctx: PipelineContext) -> list[str]:
     samples = ctx.store.load_parquet("samples.parquet")
     sample_ids = list(samples["sample_id"])
     prompts = [format_answer_prompt(q, eliciting=True) for q in samples["question"]]
+
+    if cfg.gate_by_detector and cfg.mode != "adaptive":
+        log.warning(
+            "intervene.gate_by_detector=True is only honoured in mode='adaptive' "
+            "(fixed-mode α-sweeps are meant to perturb every question uniformly); "
+            "ignoring the gate for this run."
+        )
 
     layers_label = _layers_str(target_layers)
     if cfg.mode == "adaptive":

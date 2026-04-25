@@ -441,6 +441,79 @@ def test_adaptive_alpha_no_min_max_normalisation():
     assert list(df["su_norm"]) == pytest.approx([0.4, 0.4, 1.0])
 
 
+def test_intervene_adaptive_gate_skips_safe_samples(fake_ctx):
+    """C3.c: gate_by_detector=True skips intervention for samples not at risk
+    and reuses baseline rows with α=0."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    samples = fake_ctx.store.load_parquet("samples.parquet")
+
+    judge_rows = []
+    for sid in samples["sample_id"]:
+        for j in range(3):
+            judge_rows.append(
+                {"sample_id": sid, "kind": "sample", "gen_idx": j,
+                 "decisiveness": 0.5, "vu_score": 0.1, "raw": "0.1"}
+            )
+    fake_ctx.store.save_parquet("judge_scores.parquet", pd.DataFrame(judge_rows))
+    fake_ctx.store.save_parquet(
+        "semantic_entropy.parquet",
+        pd.DataFrame({
+            "sample_id": list(samples["sample_id"]),
+            "semantic_entropy": [1.5] * len(samples),
+            "n_clusters": [2] * len(samples),
+            "n_samples": [3] * len(samples),
+        }),
+    )
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=(0, 1, 2), d_model=8)
+
+    # Hand-craft detection.parquet so that only the first sample is at risk.
+    sids = list(samples["sample_id"])
+    fake_ctx.store.save_parquet(
+        "detection.parquet",
+        pd.DataFrame({
+            "sample_id": sids,
+            "is_at_risk": [True] + [False] * (len(sids) - 1),
+        }),
+    )
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={
+                            "mode": "adaptive",
+                            "alpha_max": 0.5,
+                            "layer": 1,
+                            "gate_by_detector": True,
+                        },
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    intervene.run(fake_ctx)
+    alphas = fake_ctx.store.load_parquet("intervention/adaptive/alphas.parquet")
+    # Non-at-risk samples must have alpha forced to 0.
+    safe_alphas = alphas[alphas["sample_id"].isin(sids[1:])]["alpha"]
+    assert (safe_alphas == 0.0).all()
+
+    gens = fake_ctx.store.load_parquet("intervention/adaptive/generations.parquet")
+    # The reused baseline rows are tagged α=0 too.
+    safe_rows = gens[gens["sample_id"].isin(sids[1:])]
+    assert (safe_rows["alpha"] == 0.0).all()
+    # Texts for safe samples must equal the baseline generations verbatim.
+    baseline = fake_ctx.store.load_parquet("generations.parquet")
+    for sid in sids[1:]:
+        b = baseline[baseline["sample_id"] == sid].sort_values(["kind", "gen_idx"])
+        g = safe_rows[safe_rows["sample_id"] == sid].sort_values(["kind", "gen_idx"])
+        assert list(g["text"]) == list(b["text"])
+
+
 def test_intervene_adaptive_writes_expected_files(fake_ctx):
     prepare.run(fake_ctx)
     generate.run(fake_ctx)
