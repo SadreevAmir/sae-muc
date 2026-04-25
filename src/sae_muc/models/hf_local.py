@@ -206,6 +206,11 @@ class HFLocalBackend:
                 return (hook_fn(output[0]),) + output[1:]
             return hook_fn(output)
 
+        # Hard-coded `model.model.layers[i]` path: matches Llama / Mistral /
+        # Qwen2 architectures (HF naming `XxxForCausalLM` → `.model: XxxModel`
+        # → `.layers: nn.ModuleList[XxxDecoderLayer]`). For another family
+        # (Falcon, GPT-NeoX, Phi, …) the attribute walk needs an arch-specific
+        # resolver; out of scope for the current target models.
         target = self._model.model.layers[hook_layer]
         handle = target.register_forward_hook(_wrapped)
         try:
