@@ -102,6 +102,21 @@ class InterveneStage(_Frozen):
     # sae_clamp only: target activation value for selected uncertainty
     # features (certainty features are clamped to 0). α multiplies this.
     sae_clamp_target: float = 10.0
+    # Detector gating (paper §4.2: "we modulate the influence of these
+    # features through linear interventions on all tokens in detected
+    # hallucinated responses"). When True, the adaptive run reads
+    # detection.parquet and skips the intervention for samples whose
+    # hallucination probability is below `detector_threshold` — those
+    # rows are copied verbatim from the baseline generations.parquet
+    # with alpha=0. fixed mode ignores the gate (with a warning) since
+    # the alpha-grid sweep is meant to perturb all questions uniformly.
+    gate_by_detector: bool = False
+    detector_threshold: float = 0.5
+    # Which detection.parquet column to read for the gate. Defaults to the
+    # column produced by the active stages.detect.detector_method:
+    #   "auto" — pick combined / hidden / combined_full per detector_method.
+    #   else  — read prob_hallucinate_<gate_detector_method> directly.
+    gate_detector_method: Literal["auto", "verbal", "semantic", "combined", "hidden", "combined_full"] = "auto"
 
 
 class DetectStage(_Frozen):
@@ -116,6 +131,18 @@ class DetectStage(_Frozen):
     # numbers under this threshold are not directly comparable to the paper.
     # Override per experiment via YAML (`stages.detect.refusal_vu_threshold`).
     refusal_vu_threshold: float = 0.85
+    # Hallucination-detector model (paper §4.1):
+    #   "lr_vu_se"  — three LRs over (vu), (se), (vu, se). Default; cheapest.
+    #   "lr_hidden" — also fits an LR on the pooled hidden state at
+    #                 detector_layer (paper Tab.1 reports this is best).
+    #   "combined"  — additionally fits an LR on (vu, se, hidden) concat.
+    # In all modes the verbal / semantic / combined LRs are still trained
+    # so per-feature comparisons stay available in detection_metrics.json.
+    detector_method: Literal["lr_vu_se", "lr_hidden", "combined"] = "lr_vu_se"
+    # Layer for the hidden-state probe. "auto" = middle of the available
+    # VUF layers (independent of stages.intervene.layer so detector and
+    # intervention layers can be tuned separately).
+    detector_layer: int | Literal["auto"] = "auto"
 
 
 class SAEFeaturesStage(_Frozen):
