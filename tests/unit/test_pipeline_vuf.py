@@ -5,7 +5,8 @@ import pytest
 import torch
 
 from sae_muc.pipeline import vuf
-from sae_muc.pipeline.vuf import _pool, _split_ids
+from sae_muc.pipeline._utils import _pool
+from sae_muc.pipeline.vuf import _split_ids
 
 
 # ------------- unit tests on pure helpers ----------------

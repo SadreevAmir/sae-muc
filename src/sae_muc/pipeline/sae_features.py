@@ -19,9 +19,8 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from sae_muc.pipeline._utils import _pool, _resolve_layer
 from sae_muc.pipeline.context import PipelineContext
-from sae_muc.pipeline.intervene import _resolve_layer
-from sae_muc.pipeline.vuf import _pool
 
 if TYPE_CHECKING:
     import torch

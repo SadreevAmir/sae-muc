@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
+from sae_muc.pipeline._utils import _resolve_layer
 from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
@@ -42,19 +43,6 @@ ADAPTIVE_DIR = "intervention/adaptive"
 
 def _alpha_dir(alpha: float) -> str:
     return f"intervention/alpha_{alpha:+.2f}"
-
-
-def _resolve_layer(layer_cfg: int | str, available: list[int]) -> int:
-    if layer_cfg == "auto":
-        if not available:
-            raise ValueError("intervene.layer='auto' but no VUF directions are available.")
-        return available[len(available) // 2]
-    layer = int(layer_cfg)
-    if layer not in available:
-        raise ValueError(
-            f"intervene.layer={layer} has no VUF direction; available layers: {available}"
-        )
-    return layer
 
 
 def _build_hook(direction: "torch.Tensor", alpha: float):

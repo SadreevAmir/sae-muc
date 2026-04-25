@@ -5,7 +5,8 @@ import pytest
 import torch
 
 from sae_muc.pipeline import generate, hidden_states, intervene, prepare
-from sae_muc.pipeline.intervene import _alpha_dir, _build_hook, _resolve_layer
+from sae_muc.pipeline._utils import _resolve_layer
+from sae_muc.pipeline.intervene import _alpha_dir, _build_hook
 
 
 # ------------- helpers ----------------

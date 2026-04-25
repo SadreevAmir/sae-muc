@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from sae_muc.pipeline._utils import _pool
 from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
@@ -39,23 +40,6 @@ def _layer_in_path(layer: int) -> str:
 
 def _direction_out_path(layer: int) -> str:
     return f"vuf/direction_layer_{layer}.safetensors"
-
-
-def _pool(hs: "torch.Tensor", pooling: str, q_len: int, seq_len: int) -> "torch.Tensor":
-    """hs shape: [seq_len, d_model]. Returns [d_model]."""
-    q_len = max(1, min(q_len, seq_len))
-    if pooling == "last_token_q":
-        return hs[q_len - 1]
-    if pooling == "last_token_a":
-        return hs[-1]
-    if pooling == "mean_q":
-        return hs[:q_len].mean(dim=0)
-    if pooling == "mean_a":
-        if q_len >= seq_len:
-            # Degenerate: no answer tokens. Fall back to the last question token.
-            return hs[q_len - 1]
-        return hs[q_len:].mean(dim=0)
-    raise ValueError(f"Unknown pooling: {pooling!r}")
 
 
 def _per_question_mean_vu(judge_df: pd.DataFrame) -> pd.Series:
