@@ -6,7 +6,7 @@ import torch
 
 from sae_muc.pipeline import vuf
 from sae_muc.pipeline._utils import _pool
-from sae_muc.pipeline.vuf import _split_ids
+from sae_muc.pipeline.vuf import _split_ids, _split_ids_by_threshold
 
 
 # ------------- unit tests on pure helpers ----------------
@@ -54,6 +54,24 @@ def test_split_ids_order_picks_most_uncertain():
     top, bot = _split_ids(vu, n_top=2, n_bot=2)
     assert set(top) == {"b", "d"}  # highest VU
     assert set(bot) == {"a", "e"}  # lowest VU
+
+
+def test_split_ids_by_threshold_paper_app_g1_default():
+    """C4: paper App G.1 splits by VU ≥ 0.9 (uncertain) / ≤ 0.05 (certain)."""
+    vu = pd.Series(
+        [0.95, 0.91, 0.5, 0.04, 0.0, 0.5],
+        index=["u0", "u1", "m0", "c0", "c1", "m1"],
+    )
+    unc, cer = _split_ids_by_threshold(vu, vu_uncertain_min=0.9, vu_certain_max=0.05)
+    assert set(unc) == {"u0", "u1"}
+    assert set(cer) == {"c0", "c1"}
+
+
+def test_split_ids_by_threshold_excludes_middle_band():
+    vu = pd.Series([0.6, 0.7, 0.8], index=["a", "b", "c"])
+    unc, cer = _split_ids_by_threshold(vu, vu_uncertain_min=0.9, vu_certain_max=0.05)
+    assert unc == []
+    assert cer == []
 
 
 # ------------- stage-level tests with hand-crafted artefacts ----------------

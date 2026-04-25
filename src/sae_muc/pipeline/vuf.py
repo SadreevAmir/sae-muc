@@ -68,6 +68,17 @@ def _split_ids(vu_per_q: pd.Series, n_top: int, n_bot: int) -> tuple[list[str], 
     )
 
 
+def _split_ids_by_threshold(
+    vu_per_q: pd.Series, *, vu_uncertain_min: float, vu_certain_max: float,
+) -> tuple[list[str], list[str]]:
+    """VU ≥ vu_uncertain_min → uncertain; VU ≤ vu_certain_max → certain
+    (paper App G.1 protocol for the mitigation pipeline).
+    """
+    uncertain = vu_per_q.index[vu_per_q >= vu_uncertain_min].tolist()
+    certain = vu_per_q.index[vu_per_q <= vu_certain_max].tolist()
+    return uncertain, certain
+
+
 def run(ctx: PipelineContext) -> list[str]:
     import torch
 
@@ -75,7 +86,24 @@ def run(ctx: PipelineContext) -> list[str]:
 
     judge = ctx.store.load_parquet("judge_scores.parquet")
     vu_per_q = _per_question_mean_vu(judge)
-    uncertain_ids, certain_ids = _split_ids(vu_per_q, stage_cfg.n_top, stage_cfg.n_bot)
+    if stage_cfg.selection == "vu_threshold":
+        uncertain_ids, certain_ids = _split_ids_by_threshold(
+            vu_per_q,
+            vu_uncertain_min=stage_cfg.vu_uncertain_min,
+            vu_certain_max=stage_cfg.vu_certain_max,
+        )
+        if not uncertain_ids or not certain_ids:
+            log.warning(
+                "vuf: vu_threshold selection produced empty split "
+                "(uncertain=%d @>=%.2f, certain=%d @<=%.2f); "
+                "falling back to top_n with n_top=%d / n_bot=%d",
+                len(uncertain_ids), stage_cfg.vu_uncertain_min,
+                len(certain_ids), stage_cfg.vu_certain_max,
+                stage_cfg.n_top, stage_cfg.n_bot,
+            )
+            uncertain_ids, certain_ids = _split_ids(vu_per_q, stage_cfg.n_top, stage_cfg.n_bot)
+    else:
+        uncertain_ids, certain_ids = _split_ids(vu_per_q, stage_cfg.n_top, stage_cfg.n_bot)
 
     # Persist split for downstream stages (sae_features) to reuse without
     # recomputing the sort. One row per question with the VU that drove it.

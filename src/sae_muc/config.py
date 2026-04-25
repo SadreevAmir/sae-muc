@@ -67,8 +67,19 @@ class HiddenStatesStage(_Frozen):
 
 class VUFStage(_Frozen):
     layers: list[int] | Literal["auto"] = "auto"
+    # selection chooses how the (uncertain, certain) splits are drawn:
+    #   "top_n"       — top n_top uncertain + bottom n_bot certain by VU rank
+    #                   (paper §3.1 protocol for VUF *validation* / Fig.4).
+    #   "vu_threshold" — VU ≥ vu_uncertain_min for uncertain,
+    #                    VU ≤ vu_certain_max  for certain
+    #                   (paper App G.1 protocol for *mitigation*).
+    # Default is "vu_threshold" because the mitigation pipeline (intervene,
+    # sae_features) is what `vuf/splits.parquet` mostly feeds.
+    selection: Literal["top_n", "vu_threshold"] = "vu_threshold"
     n_top: int = 250
     n_bot: int = 250
+    vu_uncertain_min: float = 0.9
+    vu_certain_max: float = 0.05
     pooling: Literal["last_token_q", "last_token_a", "mean_q", "mean_a"] = "last_token_q"
 
 
