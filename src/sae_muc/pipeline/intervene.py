@@ -287,6 +287,20 @@ def _build_per_layer_hooks(
     return hooks
 
 
+def _log_sae_feature_summary(ctx: PipelineContext, layers: list[int]) -> None:
+    """N2: emit a one-line per-layer summary of selected SAE features."""
+    cfg = ctx.cfg.stages.intervene
+    if cfg.method not in ("sae_emd", "sae_clamp"):
+        return
+    per_layer = _load_sae_feature_stats(ctx, layers)
+    for layer in layers:
+        s = per_layer[layer]
+        log.info(
+            "SAE features: %d uncertainty, %d certainty (layer %d, method=%s)",
+            len(s["uncertainty_idx"]), len(s["certainty_idx"]), layer, cfg.method,
+        )
+
+
 def _compute_adaptive_alphas(
     ctx: PipelineContext,
     sample_ids: list[str],
@@ -549,6 +563,7 @@ def run(ctx: PipelineContext) -> list[str]:
         )
 
     layers_label = _layers_str(target_layers)
+    _log_sae_feature_summary(ctx, target_layers)
     if cfg.mode == "adaptive":
         log.info(
             "mode=adaptive, method=%s, layers=%s, α_max=%.2f (per-question α via Eq.6)",
