@@ -151,6 +151,18 @@ class SAEFeaturesStage(_Frozen):
     # Top K features to mark as 'uncertainty' (positive Cohen's d) and K to
     # mark as 'certainty' (negative d). Paper prototype used ~50.
     k_top: int = 50
+    # Selection algorithm:
+    #   "topk"      — take the |d|-largest k_top features in each direction
+    #                 (cheap, deterministic).
+    #   "consensus" — old prototype's robust filter
+    #     (build_intervention_config_v2.py:207-226):
+    #     bootstrap-stable AND (BH-FDR significant OR |d| > cohens_d_threshold).
+    #     Uses scipy.stats.ttest_ind (Welch). More stable on small n; slower.
+    selection_mode: Literal["topk", "consensus"] = "topk"
+    bootstrap_n: int = 200
+    bootstrap_freq_threshold: float = 0.8
+    fdr_alpha: float = 0.05
+    cohens_d_threshold: float = 0.3
 
 
 class EvaluateStage(_Frozen):

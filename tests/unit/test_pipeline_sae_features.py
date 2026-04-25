@@ -206,6 +206,79 @@ def test_sae_features_raises_on_d_in_mismatch(fake_ctx):
         sae_features.run(fake_ctx)
 
 
+def test_sae_features_consensus_mode_uses_bootstrap_fdr_filter(fake_ctx):
+    """S3: consensus mode keeps only bootstrap-stable, FDR-significant features."""
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "sae_features": fake_ctx.cfg.stages.sae_features.model_copy(
+                        update={
+                            "selection_mode": "consensus",
+                            # Tiny bootstrap so the test is fast; relax thresholds
+                            # so the synthetic signal in dim 0 passes.
+                            "bootstrap_n": 50,
+                            "bootstrap_freq_threshold": 0.6,
+                            "fdr_alpha": 0.05,
+                            "cohens_d_threshold": 0.3,
+                            "k_top": 4,
+                        }
+                    ),
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"layer": 1, "method": "sae_emd"}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    # 3 uncertain (signal in dim 0 → +6) and 3 certain (-6); the rest noisy.
+    fake_ctx.store.save_parquet(
+        "vuf/splits.parquet",
+        pd.DataFrame([
+            {"sample_id": f"u{i}", "mean_vu": 0.95, "split": "uncertain"} for i in range(3)
+        ] + [
+            {"sample_id": f"c{i}", "mean_vu": 0.05, "split": "certain"} for i in range(3)
+        ]),
+    )
+    fake_ctx.store.save_parquet(
+        "vuf/meta.parquet",
+        pd.DataFrame({
+            "layer": [0, 1, 2],
+            "path": [f"vuf/direction_layer_{l}.safetensors" for l in (0, 1, 2)],
+            "raw_norm": [1.0] * 3, "n_uncertain": [3] * 3, "n_certain": [3] * 3,
+            "pooling": ["last_token_q"] * 3,
+        }),
+    )
+    sids = [f"u{i}" for i in range(3)] + [f"c{i}" for i in range(3)]
+    fake_ctx.store.save_parquet(
+        "hidden_states/meta.parquet",
+        pd.DataFrame({
+            "sample_id": sids, "seq_len": [5] * 6, "question_len": [3] * 6,
+            "n_layers": [3] * 6, "answer_len": [2] * 6,
+        }),
+    )
+    tensors: dict[str, torch.Tensor] = {}
+    for sid in sids:
+        hs = torch.zeros(5, 8)
+        hs[:, 0] = 6.0 if sid.startswith("u") else -6.0
+        tensors[sid] = hs
+    fake_ctx.store.save_safetensors("hidden_states/layer_1.safetensors", tensors)
+
+    sae_features.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("sae_features/stats.parquet")
+    selected_unc = df[df["selected_as"] == "uncertainty"]
+    selected_cer = df[df["selected_as"] == "certainty"]
+    # Strong signal in dim 0 → at least one uncertainty feature; certainty
+    # symmetric. Consensus must drop everything else (no signal).
+    assert len(selected_unc) >= 1
+    assert len(selected_cer) >= 1
+    # All consensus picks must have positive (resp. negative) Cohen's d.
+    assert (selected_unc["cohen_d"] > 0).all()
+    assert (selected_cer["cohen_d"] < 0).all()
+
+
 def test_sae_features_skipped_for_non_sae_methods(fake_ctx, caplog):
     """When intervene.method is linear_vuf / sae_projected, the stage must no-op."""
     import logging

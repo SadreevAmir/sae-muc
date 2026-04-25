@@ -2,11 +2,17 @@
 
 Encode pooled hidden states (at every intervene layer) through the SAE,
 then rank latent features by Cohen's d between the uncertain and certain
-question sets. The top-k positive-d features become candidate
-"uncertainty" features; the top-k negative-d features become "certainty"
-features. Downstream intervene methods `sae_emd` and `sae_clamp` read
-the resulting selection from `sae_features/stats.parquet`, keyed by
-`layer`.
+question sets. Selection:
+
+  * `topk` (default): the |d|-largest k_top features in each direction
+    become "uncertainty" / "certainty" candidates. Deterministic, cheap.
+  * `consensus`: the old prototype's robust filter
+    (archive/old-prototype/sae_muc/build_intervention_config_v2.py:207-226).
+    Bootstrap-stable AND (BH-FDR significant under Welch's t-test OR
+    |Cohen's d| > threshold). Slower but more stable for small n.
+
+Downstream intervene methods `sae_emd` and `sae_clamp` read the resulting
+selection from `sae_features/stats.parquet`, keyed by `layer`.
 
 Required upstream stages: vuf (for `vuf/splits.parquet`,
 `vuf/meta.parquet`) and hidden_states (for the per-sample layer tensor).
@@ -18,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from sae_muc.pipeline._utils import _pool, _resolve_layers
@@ -36,6 +43,75 @@ OUTPUT = "sae_features/stats.parquet"
 # useless things: burn an SAE forward pass and potentially blow up on a
 # dim mismatch between the (default) FakeSAE and a real model's d_model.
 _SAE_METHODS_REQUIRING_FEATURES = ("sae_emd", "sae_clamp")
+
+
+def _benjamini_hochberg_mask(pvals: np.ndarray, alpha: float) -> np.ndarray:
+    """BH step-up FDR mask: True iff the feature passes at level `alpha`.
+
+    Mirrors the helper in old prototype build_intervention_config_v2.py.
+    """
+    n = pvals.size
+    if n == 0:
+        return np.zeros(0, dtype=bool)
+    order = np.argsort(pvals)
+    ranked = pvals[order]
+    thresholds = alpha * (np.arange(1, n + 1) / n)
+    passed = ranked <= thresholds
+    if not np.any(passed):
+        return np.zeros(n, dtype=bool)
+    kmax = int(np.max(np.where(passed)[0]))
+    cutoff = ranked[kmax]
+    return pvals <= cutoff
+
+
+def _bootstrap_topk_stability(
+    Xu: np.ndarray, Xc: np.ndarray, *, top_k: int, n_boot: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-feature hit rates across `n_boot` bootstrap resamples.
+
+    Returns (stab_u, stab_c) of shape [d]: the fraction of bootstraps in
+    which feature i landed in the top_k of (mean_u - mean_c) (resp. negated).
+    """
+    d = Xu.shape[1]
+    n_u, n_c = Xu.shape[0], Xc.shape[0]
+    k = min(top_k, d)
+    hit_u = np.zeros(d, dtype=np.int32)
+    hit_c = np.zeros(d, dtype=np.int32)
+    for _ in range(n_boot):
+        bu = Xu[rng.integers(0, n_u, size=n_u)]
+        bc = Xc[rng.integers(0, n_c, size=n_c)]
+        diff = bu.mean(axis=0) - bc.mean(axis=0)
+        hit_u[np.argsort(diff)[-k:]] += 1
+        hit_c[np.argsort(-diff)[-k:]] += 1
+    return hit_u / float(n_boot), hit_c / float(n_boot)
+
+
+def _consensus_select(
+    f_u_np: np.ndarray, f_c_np: np.ndarray, d_vals: np.ndarray, *,
+    sae_feat_cfg, seed: int, layer: int,
+) -> tuple[set[int], set[int]]:
+    """Old prototype consensus filter: bootstrap-stable AND (FDR-sig OR |d|>thresh)."""
+    from scipy.stats import ttest_ind
+
+    rng = np.random.default_rng(seed + int(layer))
+    tt = ttest_ind(f_u_np, f_c_np, axis=0, equal_var=False, nan_policy="omit")
+    pvals = np.nan_to_num(np.asarray(tt.pvalue, dtype=np.float64), nan=1.0)
+    tvals = np.nan_to_num(np.asarray(tt.statistic, dtype=np.float64), nan=0.0)
+    sig = _benjamini_hochberg_mask(pvals, alpha=float(sae_feat_cfg.fdr_alpha))
+
+    stab_u, stab_c = _bootstrap_topk_stability(
+        f_u_np, f_c_np,
+        top_k=int(sae_feat_cfg.k_top),
+        n_boot=int(sae_feat_cfg.bootstrap_n),
+        rng=rng,
+    )
+
+    d_thresh = float(sae_feat_cfg.cohens_d_threshold)
+    boot_thresh = float(sae_feat_cfg.bootstrap_freq_threshold)
+
+    unc_consensus = (stab_u >= boot_thresh) & ((sig & (tvals > 0)) | (d_vals > d_thresh))
+    cer_consensus = (stab_c >= boot_thresh) & ((sig & (tvals < 0)) | (d_vals < -d_thresh))
+    return set(np.where(unc_consensus)[0].tolist()), set(np.where(cer_consensus)[0].tolist())
 
 
 def _cohens_d(f_u: "torch.Tensor", f_c: "torch.Tensor") -> "torch.Tensor":
@@ -129,12 +205,26 @@ def run(ctx: PipelineContext) -> list[str]:
         f_c = ctx.sae.encode(X_c)
         d = _cohens_d(f_u, f_c)
 
-        # Keep |d|-largest with positive d as "uncertainty" features, |d|-largest
-        # with negative d as "certainty" features. Both top-k.
-        order_desc = d.argsort(descending=True).tolist()
-        order_asc = d.argsort(descending=False).tolist()
-        uncertainty_idx = set(order_desc[:k])
-        certainty_idx = set(order_asc[:k])
+        if sae_feat_cfg.selection_mode == "consensus":
+            f_u_np = f_u.detach().cpu().numpy().astype(np.float32)
+            f_c_np = f_c.detach().cpu().numpy().astype(np.float32)
+            d_np = d.detach().cpu().numpy().astype(np.float64)
+            uncertainty_idx, certainty_idx = _consensus_select(
+                f_u_np, f_c_np, d_np,
+                sae_feat_cfg=sae_feat_cfg, seed=int(ctx.cfg.seed), layer=target_layer,
+            )
+            log.info(
+                "sae_features layer=%d (consensus): %d uncertainty, %d certainty "
+                "features after bootstrap+FDR+|d| filter",
+                target_layer, len(uncertainty_idx), len(certainty_idx),
+            )
+        else:
+            # Keep |d|-largest with positive d as "uncertainty" features,
+            # |d|-largest with negative d as "certainty" features. Both top-k.
+            order_desc = d.argsort(descending=True).tolist()
+            order_asc = d.argsort(descending=False).tolist()
+            uncertainty_idx = set(order_desc[:k])
+            certainty_idx = set(order_asc[:k])
         overlap = uncertainty_idx & certainty_idx
         if overlap:
             certainty_idx -= overlap
