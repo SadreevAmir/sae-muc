@@ -9,10 +9,10 @@ Two modes (selected via `cfg.stages.intervene.mode`):
 
 * **adaptive** (Mechanistic Uncertainty Calibration, paper §4.2):
   per-question α_su(x) = clip(SU_norm(x) − VU(x), 0, α_max)
-  where SU_norm is min-max normalised semantic entropy over the run and
-  VU is the mean judge VU over the N sampled answers. We loop prompts
-  one at a time, build a constant-α hook with that question's α, run the
-  same greedy+samples pair. Output:
+  where SU_norm = SE / ln(N) (paper App G.1; N is the number of sampled
+  answers used to estimate SE) and VU is the mean judge VU over those
+  N sampled answers. We loop prompts one at a time, build a constant-α
+  hook with that question's α, run the same greedy+samples pair. Output:
     intervention/adaptive/generations.parquet  — rows carry per-question α
     intervention/adaptive/alphas.parquet       — per-question (vu, se,
                                                  su_norm, alpha)
@@ -186,23 +186,28 @@ def _compute_adaptive_alphas(
     sample_ids: list[str],
     alpha_max: float,
 ) -> pd.DataFrame:
-    """Per-question α via Eq. 6: α = clip(SU_norm(x) − VU(x), 0, α_max).
+    """Per-question α via Eq.6: α = clip(SU_norm(x) − VU(x), 0, α_max).
+
+    SU_norm = SE / ln(N) per paper App G.1 (N = number of sampled answers
+    used to estimate SE). N is read per-row from `semantic_entropy.parquet`
+    so questions with a degenerate sample count don't poison the rest of
+    the run; ln(N≤1) is treated as 0 (su_norm=0).
 
     Returns a DataFrame in `sample_ids` order with columns
     (sample_id, vu, se, su_norm, alpha).
     """
     judge = ctx.store.load_parquet("judge_scores.parquet")
     vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
-    se = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")[
-        "semantic_entropy"
-    ]
+    se_df = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")
+    se = se_df["semantic_entropy"]
+    n_samples_col = se_df["n_samples"]
 
     su = np.asarray([float(se.loc[sid]) for sid in sample_ids], dtype=float)
     vu = np.asarray([float(vu_per_q.loc[sid]) for sid in sample_ids], dtype=float)
+    n_samples = np.asarray([int(n_samples_col.loc[sid]) for sid in sample_ids], dtype=int)
 
-    su_min, su_max = float(su.min()), float(su.max())
-    su_range = max(su_max - su_min, 1e-8)
-    su_norm = (su - su_min) / su_range  # 0..1
+    log_n = np.where(n_samples > 1, np.log(np.maximum(n_samples, 2)), 0.0)
+    su_norm = np.where(log_n > 0, su / log_n, 0.0)
 
     alpha = np.clip(su_norm - vu, 0.0, float(alpha_max))
     return pd.DataFrame(

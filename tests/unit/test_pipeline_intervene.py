@@ -290,12 +290,13 @@ def test_intervene_sae_projected_runs_end_to_end(fake_ctx):
 
 
 def test_adaptive_alpha_math():
-    """α(x) = clip(SU_norm(x) − VU(x), 0, α_max). Hand-trace on 3 samples."""
+    """α(x) = clip(SU/ln(N) − VU, 0, α_max). Paper App G.1 normalisation."""
+    import math
+
     import pandas as pd
 
     from sae_muc.pipeline.intervene import _compute_adaptive_alphas
 
-    # Build a mock ctx with just the two parquets we need.
     class _FakeStore:
         def __init__(self, tables):
             self._tables = tables
@@ -306,16 +307,19 @@ def test_adaptive_alpha_math():
         def __init__(self, tables):
             self.store = _FakeStore(tables)
 
+    # N=10 sampled answers per question (the paper's default).
     judge_rows = []
     for sid, vu in [("a", 0.0), ("b", 0.5), ("c", 1.0)]:
-        for j in range(2):
+        for j in range(10):
             judge_rows.append(
                 {"sample_id": sid, "kind": "sample", "gen_idx": j, "vu_score": vu}
             )
+    ln10 = math.log(10)
+    # SE chosen so SU_norm = SE/ln(10) ∈ {0, 0.5, 1.0}.
     se_rows = [
-        {"sample_id": "a", "semantic_entropy": 0.0},  # su_norm = 0
-        {"sample_id": "b", "semantic_entropy": 1.0},  # su_norm = 0.5
-        {"sample_id": "c", "semantic_entropy": 2.0},  # su_norm = 1.0
+        {"sample_id": "a", "semantic_entropy": 0.0,        "n_samples": 10},
+        {"sample_id": "b", "semantic_entropy": 0.5 * ln10, "n_samples": 10},
+        {"sample_id": "c", "semantic_entropy": 1.0 * ln10, "n_samples": 10},
     ]
     ctx = _FakeCtx({
         "judge_scores.parquet": pd.DataFrame(judge_rows),
@@ -323,12 +327,11 @@ def test_adaptive_alpha_math():
     })
 
     df = _compute_adaptive_alphas(ctx, ["a", "b", "c"], alpha_max=0.5)
+    assert list(df["su_norm"]) == pytest.approx([0.0, 0.5, 1.0])
+    # vu = [0.0, 0.5, 1.0]; diff with su_norm = [0, 0, 0]; clipped to 0.
+    assert list(df["alpha"]) == pytest.approx([0.0, 0.0, 0.0])
 
-    # su_norm = [0.0, 0.5, 1.0]; vu = [0.0, 0.5, 1.0]; diff = [0, 0, 0] → clipped 0.
-    # Sanity: SU_norm=0, VU=0 → α=0. SU_norm=0.5, VU=0.5 → 0. SU_norm=1, VU=1 → 0.
-    assert list(df["alpha"]) == [0.0, 0.0, 0.0]
-
-    # Second case: vu much lower than su — α should take positive values, capped.
+    # Second case: vu = 0 across the board — α tracks su_norm, capped at α_max.
     judge_rows_low_vu = [
         {"sample_id": sid, "kind": "sample", "gen_idx": 0, "vu_score": 0.0}
         for sid in ("a", "b", "c")
@@ -338,8 +341,52 @@ def test_adaptive_alpha_math():
         "semantic_entropy.parquet": pd.DataFrame(se_rows),
     })
     df2 = _compute_adaptive_alphas(ctx2, ["a", "b", "c"], alpha_max=0.5)
-    # su_norm = [0, 0.5, 1.0]; vu = [0, 0, 0]; diff = [0, 0.5, 1.0]; clip(_, 0, 0.5) → [0, 0.5, 0.5].
+    # su_norm = [0, 0.5, 1.0]; clip(_, 0, 0.5) → [0, 0.5, 0.5].
     assert list(df2["alpha"]) == pytest.approx([0.0, 0.5, 0.5])
+
+
+def test_adaptive_alpha_no_min_max_normalisation():
+    """Regression for C1: SU_norm must NOT be min-max-normalised over the run.
+
+    Two questions with identical SE but at the low end of the run's SE range
+    used to map to su_norm=0 under min-max; with paper-faithful SE/ln(N) they
+    instead reflect the absolute uncertainty level.
+    """
+    import math
+
+    import pandas as pd
+
+    from sae_muc.pipeline.intervene import _compute_adaptive_alphas
+
+    class _FakeStore:
+        def __init__(self, tables):
+            self._tables = tables
+        def load_parquet(self, name):
+            return self._tables[name]
+
+    class _FakeCtx:
+        def __init__(self, tables):
+            self.store = _FakeStore(tables)
+
+    # All three questions have SE near the middle of the [0, ln(10)] range,
+    # but a, b are at SE=0.4*ln(10), c at SE=ln(10). Under min-max, a and b
+    # would collapse to su_norm=0; under SE/ln(N) they're 0.4.
+    ln10 = math.log(10)
+    se_rows = [
+        {"sample_id": "a", "semantic_entropy": 0.4 * ln10, "n_samples": 10},
+        {"sample_id": "b", "semantic_entropy": 0.4 * ln10, "n_samples": 10},
+        {"sample_id": "c", "semantic_entropy": 1.0 * ln10, "n_samples": 10},
+    ]
+    judge_rows = [
+        {"sample_id": sid, "kind": "sample", "gen_idx": 0, "vu_score": 0.0}
+        for sid in ("a", "b", "c")
+    ]
+    ctx = _FakeCtx({
+        "judge_scores.parquet": pd.DataFrame(judge_rows),
+        "semantic_entropy.parquet": pd.DataFrame(se_rows),
+    })
+    df = _compute_adaptive_alphas(ctx, ["a", "b", "c"], alpha_max=1.0)
+    assert list(df["su_norm"]) == pytest.approx([0.4, 0.4, 1.0])
 
 
 def test_intervene_adaptive_writes_expected_files(fake_ctx):
