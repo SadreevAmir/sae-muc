@@ -178,6 +178,34 @@ def test_sae_features_warns_on_tiny_splits(fake_ctx, caplog):
     assert any("tiny splits" in r.getMessage() for r in caplog.records)
 
 
+def test_sae_features_raises_on_d_in_mismatch(fake_ctx):
+    """Regression for I3: a wrong SAEConfig.d_in must fail loudly with a clear
+    message instead of crashing inside torch matmul during sae.encode."""
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            # Force a mismatch: FakeBackend hidden states are [_, 8] but the SAE
+            # encoder is now built to expect 4-dim input.
+            "sae": fake_ctx.cfg.sae.model_copy(update={"d_in": 4}),
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"layer": 1, "method": "sae_emd"}
+                    ),
+                }
+            ),
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    # Rebuild the SAE backend so it reflects the updated d_in.
+    from sae_muc.models.sae import build_sae_backend
+
+    object.__setattr__(fake_ctx, "sae", build_sae_backend(new_cfg.sae))
+
+    _seed_sae_features_inputs(fake_ctx)
+    with pytest.raises(ValueError, match="SAE.d_in=4 != model hidden size d_model=8"):
+        sae_features.run(fake_ctx)
+
+
 def test_sae_features_skipped_for_non_sae_methods(fake_ctx, caplog):
     """When intervene.method is linear_vuf / sae_projected, the stage must no-op."""
     import logging

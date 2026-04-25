@@ -88,6 +88,19 @@ def run(ctx: PipelineContext) -> list[str]:
     meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
     tensors = ctx.store.load_safetensors(f"hidden_states/layer_{target_layer}.safetensors")
 
+    # The SAE's encoder weights expect a fixed input dimensionality. With the
+    # default `SAEConfig.d_in=8` (FakeSAE) on top of a real model (e.g. Qwen
+    # d_model=896), the failure today is a confusing torch matmul shape error
+    # deep inside `sae.encode`. Surface it up front instead.
+    sample_tensor = next(iter(tensors.values()))
+    d_model = int(sample_tensor.shape[-1])
+    if ctx.sae.d_in != d_model:
+        raise ValueError(
+            f"SAE.d_in={ctx.sae.d_in} != model hidden size d_model={d_model}; "
+            f"either use provider=sae_lens (which infers d_in from the SAE) "
+            f"or set sae.d_in to {d_model} in the config."
+        )
+
     def pooled(sid: str) -> "torch.Tensor":
         return _pool(
             tensors[sid], vuf_cfg.pooling,
