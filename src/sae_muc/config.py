@@ -91,7 +91,14 @@ class InterveneStage(_Frozen):
     mode: Literal["fixed", "adaptive"] = "fixed"
     alpha_grid: list[float] = Field(default_factory=lambda: [-1.0, -0.5, 0.0, 0.5, 1.0])
     alpha_max: float = 1.0
-    layer: int | Literal["auto"] = "auto"
+    # Layer(s) where the hook is registered. The paper applies the linear VUF
+    # to a contiguous range of layers (App E.1, Tab.5):
+    #   "paper_range" — per-model App E.1 range (Llama 15-31, Mistral 15-31,
+    #                   Qwen 16-27); see pipeline/paper_layer_ranges.py.
+    #   list[int]     — explicit layer indices.
+    #   int           — single layer.
+    #   "auto"        — middle of the available VUF layers (single layer).
+    layer: int | list[int] | Literal["auto", "paper_range"] = "auto"
     # sae_clamp only: target activation value for selected uncertainty
     # features (certainty features are clamped to 0). α multiplies this.
     sae_clamp_target: float = 10.0

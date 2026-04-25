@@ -2,10 +2,12 @@
 
 Two modes (selected via `cfg.stages.intervene.mode`):
 
-* **fixed**: for each α in `alpha_grid`, add α·r_VU^(l) at layer l to every
-  token, generate answers with the usual greedy+samples protocol. Per-α
-  generations land in `intervention/alpha_{a:+.2f}/generations.parquet`.
-  This is the paper's Fig.5/6 ablation sweep.
+* **fixed**: for each α in `alpha_grid`, add α·r_VU^(l) at every layer in
+  `cfg.stages.intervene.layer` (paper App E.1 typically uses a contiguous
+  range like Llama 15-31) to every token, generate answers with the usual
+  greedy+samples protocol. Per-α generations land in
+  `intervention/alpha_{a:+.2f}/generations.parquet`. This is the paper's
+  Fig.5/6 ablation sweep.
 
 * **adaptive** (Mechanistic Uncertainty Calibration, paper §4.2):
   per-question α_su(x) = clip(SU_norm(x) − VU(x), 0, α_max)
@@ -17,7 +19,7 @@ Two modes (selected via `cfg.stages.intervene.mode`):
     intervention/adaptive/alphas.parquet       — per-question (vu, se,
                                                  su_norm, alpha)
 
-Summary meta (paths, layer, method, mode) in `intervention/meta.parquet`.
+Summary meta (paths, layers, method, mode) in `intervention/meta.parquet`.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
-from sae_muc.pipeline._utils import _resolve_layer
+from sae_muc.pipeline._utils import _resolve_layers
 from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
@@ -174,11 +176,47 @@ def _build_hook_dispatch(
     raise NotImplementedError(f"Unknown intervene.method={method!r}")
 
 
-def _load_sae_feature_indices(ctx: PipelineContext) -> tuple[list[int], list[int]]:
+def _load_sae_feature_indices(
+    ctx: PipelineContext, layers: list[int]
+) -> dict[int, tuple[list[int], list[int]]]:
+    """For each requested layer, return (uncertainty_idx, certainty_idx)."""
     stats = ctx.store.load_parquet("sae_features/stats.parquet")
-    unc = stats.loc[stats["selected_as"] == "uncertainty", "feature_id"].tolist()
-    cer = stats.loc[stats["selected_as"] == "certainty", "feature_id"].tolist()
-    return [int(x) for x in unc], [int(x) for x in cer]
+    out: dict[int, tuple[list[int], list[int]]] = {}
+    for layer in layers:
+        sub = stats[stats["layer"] == layer]
+        if sub.empty:
+            raise ValueError(
+                f"sae_features/stats.parquet has no rows for layer={layer}; "
+                f"available layers: {sorted(set(int(x) for x in stats['layer'].tolist()))}"
+            )
+        unc = [int(x) for x in sub.loc[sub["selected_as"] == "uncertainty", "feature_id"].tolist()]
+        cer = [int(x) for x in sub.loc[sub["selected_as"] == "certainty", "feature_id"].tolist()]
+        out[layer] = (unc, cer)
+    return out
+
+
+def _build_per_layer_hooks(
+    ctx: PipelineContext,
+    layers: list[int],
+    directions: dict[int, "torch.Tensor"],
+    alpha: float,
+) -> dict[int, callable]:
+    """Build a `{layer: hook_fn}` mapping for the configured intervene method."""
+    cfg = ctx.cfg.stages.intervene
+    if cfg.method in ("sae_emd", "sae_clamp"):
+        per_layer_idx = _load_sae_feature_indices(ctx, layers)
+    else:
+        per_layer_idx = {l: (None, None) for l in layers}
+
+    hooks: dict[int, callable] = {}
+    for layer in layers:
+        unc, cer = per_layer_idx[layer]
+        hooks[layer] = _build_hook_dispatch(
+            cfg.method, directions[layer], alpha, ctx.sae,
+            uncertainty_idx=unc, certainty_idx=cer,
+            clamp_target=cfg.sae_clamp_target,
+        )
+    return hooks
 
 
 def _compute_adaptive_alphas(
@@ -221,34 +259,34 @@ def _compute_adaptive_alphas(
     )
 
 
+def _layers_str(layers: list[int]) -> str:
+    """Compact human-readable layer-list rendering for meta rows / logs."""
+    if len(layers) == 1:
+        return str(layers[0])
+    if layers == list(range(layers[0], layers[-1] + 1)):
+        return f"{layers[0]}-{layers[-1]}"
+    return ",".join(str(l) for l in layers)
+
+
 def _run_fixed(
     ctx: PipelineContext,
     prompts: list[str],
     sample_ids: list[str],
-    direction: "torch.Tensor",
-    target_layer: int,
+    directions: dict[int, "torch.Tensor"],
+    target_layers: list[int],
 ) -> list[str]:
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
-    unc_idx, cer_idx = (
-        _load_sae_feature_indices(ctx)
-        if cfg.method in ("sae_emd", "sae_clamp")
-        else (None, None)
-    )
     outputs: list[str] = []
     for alpha in cfg.alpha_grid:
-        hook = _build_hook_dispatch(
-            cfg.method, direction, alpha, ctx.sae,
-            uncertainty_idx=unc_idx, certainty_idx=cer_idx,
-            clamp_target=cfg.sae_clamp_target,
-        )
+        hooks = _build_per_layer_hooks(ctx, target_layers, directions, alpha)
         greedy = ctx.llm.generate_with_hook(
-            prompts, hook_layer=target_layer, hook_fn=hook,
+            prompts, hook_layer=target_layers, hook_fn=hooks,
             temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
             seed=ctx.cfg.seed,
         )
         sampled = ctx.llm.generate_with_hook(
-            prompts, hook_layer=target_layer, hook_fn=hook,
+            prompts, hook_layer=target_layers, hook_fn=hooks,
             temperature=gen_cfg.temperature_high, max_new_tokens=gen_cfg.max_new_tokens,
             n=gen_cfg.n_samples, seed=ctx.cfg.seed,
         )
@@ -257,11 +295,12 @@ def _run_fixed(
         ctx.store.save_parquet(path, pd.DataFrame(rows))
         outputs.append(path)
 
+    layers_label = _layers_str(target_layers)
     meta = pd.DataFrame(
         {
             "alpha": [float(a) for a in cfg.alpha_grid],
             "path": [f"{_alpha_dir(a)}/generations.parquet" for a in cfg.alpha_grid],
-            "layer": [target_layer] * len(cfg.alpha_grid),
+            "layers": [layers_label] * len(cfg.alpha_grid),
             "method": [cfg.method] * len(cfg.alpha_grid),
             "mode": ["fixed"] * len(cfg.alpha_grid),
         }
@@ -275,16 +314,11 @@ def _run_adaptive(
     ctx: PipelineContext,
     prompts: list[str],
     sample_ids: list[str],
-    direction: "torch.Tensor",
-    target_layer: int,
+    directions: dict[int, "torch.Tensor"],
+    target_layers: list[int],
 ) -> list[str]:
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
-    unc_idx, cer_idx = (
-        _load_sae_feature_indices(ctx)
-        if cfg.method in ("sae_emd", "sae_clamp")
-        else (None, None)
-    )
 
     alphas_df = _compute_adaptive_alphas(ctx, sample_ids, cfg.alpha_max)
     ctx.store.save_parquet(f"{ADAPTIVE_DIR}/alphas.parquet", alphas_df)
@@ -296,19 +330,15 @@ def _run_adaptive(
     rows: list[dict] = []
     for i, (sid, prompt) in enumerate(zip(sample_ids, prompts, strict=True)):
         alpha_i = float(alphas_df.iloc[i]["alpha"])
-        hook = _build_hook_dispatch(
-            cfg.method, direction, alpha_i, ctx.sae,
-            uncertainty_idx=unc_idx, certainty_idx=cer_idx,
-            clamp_target=cfg.sae_clamp_target,
-        )
+        hooks = _build_per_layer_hooks(ctx, target_layers, directions, alpha_i)
 
         greedy_i = ctx.llm.generate_with_hook(
-            [prompt], hook_layer=target_layer, hook_fn=hook,
+            [prompt], hook_layer=target_layers, hook_fn=hooks,
             temperature=gen_cfg.temperature_low, max_new_tokens=gen_cfg.max_new_tokens, n=1,
             seed=ctx.cfg.seed,
         )
         sampled_i = ctx.llm.generate_with_hook(
-            [prompt], hook_layer=target_layer, hook_fn=hook,
+            [prompt], hook_layer=target_layers, hook_fn=hooks,
             temperature=gen_cfg.temperature_high, max_new_tokens=gen_cfg.max_new_tokens,
             n=gen_cfg.n_samples, seed=ctx.cfg.seed,
         )
@@ -319,12 +349,13 @@ def _run_adaptive(
     gen_path = f"{ADAPTIVE_DIR}/generations.parquet"
     ctx.store.save_parquet(gen_path, pd.DataFrame(rows))
 
+    layers_label = _layers_str(target_layers)
     meta = pd.DataFrame(
         [
             {
                 "alpha": None,
                 "path": gen_path,
-                "layer": target_layer,
+                "layers": layers_label,
                 "method": cfg.method,
                 "mode": "adaptive",
                 "mean_alpha": float(alphas_df["alpha"].mean()),
@@ -370,24 +401,28 @@ def run(ctx: PipelineContext) -> list[str]:
 
     vuf_meta = ctx.store.load_parquet("vuf/meta.parquet")
     available = sorted(int(x) for x in vuf_meta["layer"].tolist())
-    target_layer = _resolve_layer(cfg.layer, available)
+    target_layers = _resolve_layers(cfg.layer, available, model_name=ctx.cfg.model.name)
 
-    direction = ctx.store.load_safetensors(
-        f"vuf/direction_layer_{target_layer}.safetensors"
-    )["direction"]
+    directions: dict[int, "torch.Tensor"] = {
+        layer: ctx.store.load_safetensors(
+            f"vuf/direction_layer_{layer}.safetensors"
+        )["direction"]
+        for layer in target_layers
+    }
 
     samples = ctx.store.load_parquet("samples.parquet")
     sample_ids = list(samples["sample_id"])
     prompts = [format_answer_prompt(q, eliciting=True) for q in samples["question"]]
 
+    layers_label = _layers_str(target_layers)
     if cfg.mode == "adaptive":
         log.info(
-            "mode=adaptive, method=%s, layer=%d, α_max=%.2f (per-question α via Eq.6)",
-            cfg.method, target_layer, cfg.alpha_max,
+            "mode=adaptive, method=%s, layers=%s, α_max=%.2f (per-question α via Eq.6)",
+            cfg.method, layers_label, cfg.alpha_max,
         )
-        return _run_adaptive(ctx, prompts, sample_ids, direction, target_layer)
+        return _run_adaptive(ctx, prompts, sample_ids, directions, target_layers)
     log.info(
-        "mode=fixed, method=%s, layer=%d, α grid=%s",
-        cfg.method, target_layer, list(cfg.alpha_grid),
+        "mode=fixed, method=%s, layers=%s, α grid=%s",
+        cfg.method, layers_label, list(cfg.alpha_grid),
     )
-    return _run_fixed(ctx, prompts, sample_ids, direction, target_layer)
+    return _run_fixed(ctx, prompts, sample_ids, directions, target_layers)

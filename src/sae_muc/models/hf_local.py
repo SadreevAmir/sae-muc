@@ -172,7 +172,7 @@ class HFLocalBackend:
         self,
         prompts: list[str],
         *,
-        hook_layer: int,
+        hook_layer: int | list[int],
         hook_fn,
         temperature: float,
         max_new_tokens: int,
@@ -180,11 +180,16 @@ class HFLocalBackend:
         system: str | None = None,
         seed: int | None = None,
     ) -> list[list[Generation]]:
-        """Same as `generate` but with `hook_fn` applied at `hook_layer`'s residual stream.
+        """Same as `generate` but with `hook_fn` applied at the residual stream of `hook_layer`.
 
-        `hook_fn(residual: [B, T, D]) -> [B, T, D]` runs after every forward of the
-        target transformer block. Path is Llama/Mistral/Qwen2-compatible
-        (`model.model.layers[i]`); other architectures will need a layer-map update.
+        `hook_layer` accepts either a single int or a list of ints (paper App E.1
+        intervenes on a contiguous range). `hook_fn` may be:
+          - a single Callable → applied to every layer in `hook_layer`,
+          - or a Mapping[int, Callable] → per-layer Callables keyed by index.
+
+        `hook_fn(residual: [B, T, D]) -> [B, T, D]` runs after every forward of
+        each target transformer block. Path is Llama/Mistral/Qwen2-compatible
+        (`model.model.layers[i]`).
         """
         import torch
 
@@ -208,25 +213,37 @@ class HFLocalBackend:
         if do_sample:
             gen_kwargs["temperature"] = temperature
 
-        def _wrapped(module, _inputs, output):
-            if isinstance(output, tuple):
-                return (hook_fn(output[0]),) + output[1:]
-            return hook_fn(output)
+        layers = [int(hook_layer)] if isinstance(hook_layer, int) else [int(l) for l in hook_layer]
+
+        def _layer_fn(layer: int):
+            if isinstance(hook_fn, dict):
+                return hook_fn[layer]
+            return hook_fn
+
+        def _make_wrapper(fn):
+            def _wrapped(module, _inputs, output):
+                if isinstance(output, tuple):
+                    return (fn(output[0]),) + output[1:]
+                return fn(output)
+            return _wrapped
 
         # Hard-coded `model.model.layers[i]` path: matches Llama / Mistral /
         # Qwen2 architectures (HF naming `XxxForCausalLM` → `.model: XxxModel`
         # → `.layers: nn.ModuleList[XxxDecoderLayer]`). For another family
         # (Falcon, GPT-NeoX, Phi, …) the attribute walk needs an arch-specific
         # resolver; out of scope for the current target models.
-        target = self._model.model.layers[hook_layer]
-        handle = target.register_forward_hook(_wrapped)
+        handles = [
+            self._model.model.layers[l].register_forward_hook(_make_wrapper(_layer_fn(l)))
+            for l in layers
+        ]
         try:
             if seed is not None and do_sample:
                 torch.manual_seed(int(seed))
             with torch.inference_mode():
                 out = self._model.generate(**inputs, **gen_kwargs)
         finally:
-            handle.remove()
+            for h in handles:
+                h.remove()
 
         decoded = self._tokenizer.batch_decode(out[:, input_len:], skip_special_tokens=True)
         result: list[list[Generation]] = []

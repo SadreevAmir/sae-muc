@@ -1,11 +1,12 @@
 """sae_features: SAE-latent feature analysis for the uncertain / certain split.
 
-Encode pooled hidden states (at the intervene layer) through the SAE,
+Encode pooled hidden states (at every intervene layer) through the SAE,
 then rank latent features by Cohen's d between the uncertain and certain
 question sets. The top-k positive-d features become candidate
 "uncertainty" features; the top-k negative-d features become "certainty"
 features. Downstream intervene methods `sae_emd` and `sae_clamp` read
-the resulting selection from `sae_features/stats.parquet`.
+the resulting selection from `sae_features/stats.parquet`, keyed by
+`layer`.
 
 Required upstream stages: vuf (for `vuf/splits.parquet`,
 `vuf/meta.parquet`) and hidden_states (for the per-sample layer tensor).
@@ -19,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from sae_muc.pipeline._utils import _pool, _resolve_layer
+from sae_muc.pipeline._utils import _pool, _resolve_layers
 from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
@@ -83,80 +84,83 @@ def run(ctx: PipelineContext) -> list[str]:
 
     vuf_meta = ctx.store.load_parquet("vuf/meta.parquet")
     available = sorted(int(x) for x in vuf_meta["layer"].tolist())
-    target_layer = _resolve_layer(intervene_cfg.layer, available)
-
-    meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
-    tensors = ctx.store.load_safetensors(f"hidden_states/layer_{target_layer}.safetensors")
-
-    # The SAE's encoder weights expect a fixed input dimensionality. With the
-    # default `SAEConfig.d_in=8` (FakeSAE) on top of a real model (e.g. Qwen
-    # d_model=896), the failure today is a confusing torch matmul shape error
-    # deep inside `sae.encode`. Surface it up front instead.
-    sample_tensor = next(iter(tensors.values()))
-    d_model = int(sample_tensor.shape[-1])
-    if ctx.sae.d_in != d_model:
-        raise ValueError(
-            f"SAE.d_in={ctx.sae.d_in} != model hidden size d_model={d_model}; "
-            f"either use provider=sae_lens (which infers d_in from the SAE) "
-            f"or set sae.d_in to {d_model} in the config."
-        )
-
-    def pooled(sid: str) -> "torch.Tensor":
-        return _pool(
-            tensors[sid], vuf_cfg.pooling,
-            int(meta.loc[sid, "question_len"]),
-            int(meta.loc[sid, "seq_len"]),
-        )
-
-    X_u = torch.stack([pooled(sid) for sid in uncertain_ids]).float()
-    X_c = torch.stack([pooled(sid) for sid in certain_ids]).float()
-
-    log.info(
-        "encoding %d uncertain + %d certain samples through SAE (layer %d, d_in=%d, "
-        "d_latent=%d); k_top=%d",
-        len(uncertain_ids), len(certain_ids), target_layer,
-        ctx.sae.d_in, ctx.sae.d_latent, sae_feat_cfg.k_top,
+    target_layers = _resolve_layers(
+        intervene_cfg.layer, available, model_name=ctx.cfg.model.name
     )
 
-    f_u = ctx.sae.encode(X_u)
-    f_c = ctx.sae.encode(X_c)
-    d = _cohens_d(f_u, f_c)
+    hs_meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
+    k = min(int(sae_feat_cfg.k_top), ctx.sae.d_latent)
+    rows: list[dict] = []
 
-    # Keep |d|-largest with positive d as "uncertainty" features, |d|-largest
-    # with negative d as "certainty" features. Both top-k (k_top).
-    k = int(sae_feat_cfg.k_top)
-    k = min(k, ctx.sae.d_latent)
-    order_desc = d.argsort(descending=True).tolist()
-    order_asc = d.argsort(descending=False).tolist()
-    uncertainty_idx = set(order_desc[:k])
-    certainty_idx = set(order_asc[:k])
-    # Clean potential overlap (shouldn't happen if k ≤ d_latent/2, but be safe).
-    overlap = uncertainty_idx & certainty_idx
-    if overlap:
-        certainty_idx -= overlap
-        log.warning(
-            "sae_features: %d feature ids were top-k in both directions; kept as uncertainty only",
-            len(overlap),
+    for target_layer in target_layers:
+        tensors = ctx.store.load_safetensors(f"hidden_states/layer_{target_layer}.safetensors")
+
+        # The SAE's encoder weights expect a fixed input dimensionality. With
+        # the default `SAEConfig.d_in=8` (FakeSAE) on top of a real model
+        # (e.g. Qwen d_model=896), the failure today is a confusing torch
+        # matmul shape error deep inside `sae.encode`. Surface it up front.
+        sample_tensor = next(iter(tensors.values()))
+        d_model = int(sample_tensor.shape[-1])
+        if ctx.sae.d_in != d_model:
+            raise ValueError(
+                f"SAE.d_in={ctx.sae.d_in} != model hidden size d_model={d_model}; "
+                f"either use provider=sae_lens (which infers d_in from the SAE) "
+                f"or set sae.d_in to {d_model} in the config."
+            )
+
+        def pooled(sid: str, _tensors=tensors) -> "torch.Tensor":
+            return _pool(
+                _tensors[sid], vuf_cfg.pooling,
+                int(hs_meta.loc[sid, "question_len"]),
+                int(hs_meta.loc[sid, "seq_len"]),
+            )
+
+        X_u = torch.stack([pooled(sid) for sid in uncertain_ids]).float()
+        X_c = torch.stack([pooled(sid) for sid in certain_ids]).float()
+
+        log.info(
+            "encoding %d uncertain + %d certain samples through SAE (layer %d, d_in=%d, "
+            "d_latent=%d); k_top=%d",
+            len(uncertain_ids), len(certain_ids), target_layer,
+            ctx.sae.d_in, ctx.sae.d_latent, k,
         )
 
-    rows = []
-    mean_u = f_u.mean(dim=0)
-    mean_c = f_c.mean(dim=0)
-    for i in range(ctx.sae.d_latent):
-        if i in uncertainty_idx:
-            selected = "uncertainty"
-        elif i in certainty_idx:
-            selected = "certainty"
-        else:
-            selected = ""
-        rows.append({
-            "feature_id": i,
-            "layer": target_layer,
-            "cohen_d": float(d[i].item()),
-            "mean_uncertain": float(mean_u[i].item()),
-            "mean_certain": float(mean_c[i].item()),
-            "selected_as": selected,
-        })
+        f_u = ctx.sae.encode(X_u)
+        f_c = ctx.sae.encode(X_c)
+        d = _cohens_d(f_u, f_c)
+
+        # Keep |d|-largest with positive d as "uncertainty" features, |d|-largest
+        # with negative d as "certainty" features. Both top-k.
+        order_desc = d.argsort(descending=True).tolist()
+        order_asc = d.argsort(descending=False).tolist()
+        uncertainty_idx = set(order_desc[:k])
+        certainty_idx = set(order_asc[:k])
+        overlap = uncertainty_idx & certainty_idx
+        if overlap:
+            certainty_idx -= overlap
+            log.warning(
+                "sae_features layer=%d: %d feature ids were top-k in both "
+                "directions; kept as uncertainty only",
+                target_layer, len(overlap),
+            )
+
+        mean_u = f_u.mean(dim=0)
+        mean_c = f_c.mean(dim=0)
+        for i in range(ctx.sae.d_latent):
+            if i in uncertainty_idx:
+                selected = "uncertainty"
+            elif i in certainty_idx:
+                selected = "certainty"
+            else:
+                selected = ""
+            rows.append({
+                "feature_id": i,
+                "layer": target_layer,
+                "cohen_d": float(d[i].item()),
+                "mean_uncertain": float(mean_u[i].item()),
+                "mean_certain": float(mean_c[i].item()),
+                "selected_as": selected,
+            })
 
     ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
     return [OUTPUT]

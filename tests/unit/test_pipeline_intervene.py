@@ -94,7 +94,7 @@ def test_intervene_writes_per_alpha_files_and_summary(fake_ctx):
 
     meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
     assert list(meta["alpha"]) == [-1.0, 0.0, 1.0]
-    assert (meta["layer"] == 1).all()
+    assert (meta["layers"] == "1").all()
     assert (meta["method"] == "linear_vuf").all()
 
 
@@ -146,7 +146,59 @@ def test_intervene_auto_layer_picks_middle(fake_ctx):
     object.__setattr__(fake_ctx, "cfg", new_cfg)
     intervene.run(fake_ctx)
     meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
-    assert (meta["layer"] == 2).all()  # 4 layers → middle index 2
+    assert (meta["layers"] == "2").all()  # 4 layers → middle index 2
+
+
+def test_intervene_multi_layer_registers_hook_per_layer(fake_ctx):
+    """C2: passing layer=[a, b, c] registers hooks at each layer; meta records the range."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=(0, 1, 2))
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"alpha_grid": [1.0], "layer": [0, 1, 2]},
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    intervene.run(fake_ctx)
+    meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    # Contiguous range — rendered as "0-2".
+    assert (meta["layers"] == "0-2").all()
+
+
+def test_intervene_paper_range_uses_app_e1(fake_ctx):
+    """C2: layer='paper_range' looks up the App E.1 range by model.name substring."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    # Available layers cover Llama range 15-17 only; paper_range intersects to those.
+    _seed_vuf_artefacts(fake_ctx, layers=(15, 16, 17, 18))
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "model": fake_ctx.cfg.model.model_copy(update={"name": "fake-llama-7b"}),
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"alpha_grid": [1.0], "layer": "paper_range"},
+                    ),
+                }
+            ),
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    intervene.run(fake_ctx)
+    meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    # Llama paper range = 15-31; intersected with available 15..18 → 15-18.
+    assert (meta["layers"] == "15-18").all()
 
 
 def test_intervene_sae_emd_requires_sae_features_artefact(fake_ctx):

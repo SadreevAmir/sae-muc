@@ -100,7 +100,7 @@ class FakeBackend:
         self,
         prompts: list[str],
         *,
-        hook_layer: int,
+        hook_layer: int | list[int],
         hook_fn,
         temperature: float,
         max_new_tokens: int,
@@ -110,14 +110,19 @@ class FakeBackend:
     ) -> list[list[Generation]]:
         """Probe `hook_fn` to derive a perturbation signature, then generate
         with the signature baked into the prompt so different hooks produce
-        different outputs. No real activations are touched.
+        different outputs. Multi-layer hooks are summed into a single hint.
+        No real activations are touched.
         """
         import torch
 
-        _ = hook_layer, system, seed
+        _ = system, seed
+        layers = [int(hook_layer)] if isinstance(hook_layer, int) else [int(l) for l in hook_layer]
         probe = torch.ones(1, 1, self._D_MODEL)
-        perturbed = hook_fn(probe)
-        alpha_hint = float((perturbed - probe).sum().item())
+        alpha_hint = 0.0
+        for l in layers:
+            fn = hook_fn[l] if isinstance(hook_fn, dict) else hook_fn
+            perturbed = fn(probe)
+            alpha_hint += float((perturbed - probe).sum().item())
         tagged = [f"[hook:{alpha_hint:+.4f}] {p}" for p in prompts]
         return self.generate(
             tagged,
