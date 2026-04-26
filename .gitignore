@@ -35,3 +35,8 @@ project_report (1)/
 
 # Per-developer instructions for Claude Code (kept local)
 CLAUDE.md
+
+# Internal session artefacts (review notes, executor reports, scratch
+# write-ups). Anchored to repo root so the name doesn't collide with a
+# nested `docs/` package elsewhere.
+/docs/

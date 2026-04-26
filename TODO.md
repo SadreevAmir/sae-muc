@@ -174,8 +174,34 @@
 
 ---
 
-## P5 — ergonomics (качество жизни; делать по потребности)
+## P5 — ergonomics & follow-ups (качество жизни; делать по потребности)
 
+### Из ревью-сессии — проверки и hardening
+- [ ] **Live smoke на Qwen2.5-0.5B перед первым серверным ран'ом.**
+      На FakeBackend проверены multi-layer hooks (C2), `last_k_tokens`
+      slicing (C7), `torch.manual_seed` (C8); реальное поведение на CUDA
+      / на реальной архитектуре HF-модели не запускалось.
+- [ ] **Migration script для legacy `intervention/meta.parquet`.**
+      После C2 колонка `layer: int` → `layers: str`. Старые ран-папки
+      несовместимы при дозапуске `evaluate_post`. Делать **только если
+      есть legacy данные**, которые нельзя перепрогнать.
+- [ ] **Mandatory pre-check на `detection.parquet`** в начале
+      `intervene.run` при `gate_by_detector=True`. Сейчас падает с
+      `FileNotFoundError` в `load_parquet`, можно дать дружелюбную
+      ошибку «detect-стадия не была запущена».
+- [ ] **Гибкость поведения при `detect skipped + gate_by_detector=True`.**
+      Сейчас `is_at_risk = False` для всех (default «не вмешиваемся при
+      неуверенности»). Может потребоваться флаг
+      `if_detect_skipped: gate_off | apply_to_all` если хочется иначе.
+- [ ] **Granular `paper_layer_ranges.py` substring matching.** Сейчас
+      Llama-8B и Llama-70B попадают в одну ветку (15-31). App E.1 даёт
+      разные диапазоны для разных размеров — добавить точные подстроки.
+- [ ] **`last_k_tokens` edge case** при `pooling=last_token_q` если
+      вопрос обрезан раньше окна: текущий fallback берёт первый токен
+      ответа. Поведение задокументировано; добавить assert/warning,
+      когда `last_k < question_len`, или менять pooling автоматически.
+
+### Раннее существовавшее
 - [ ] `sae-muc join <run_id>` CLI: слить все parquet'ы run'а в одну
       широкую таблицу (samples ⋈ generations ⋈ judge ⋈ se ⋈ accuracy)
       для ad-hoc анализа в ноутбуке.
