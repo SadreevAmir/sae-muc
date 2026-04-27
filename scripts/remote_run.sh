@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
-# remote_run.sh — kick off a pipeline run on the server from your laptop.
+# remote_run.sh — kick off a sae-muc run on the server from your laptop.
 #
 # Usage:
 #   export SAE_MUC_SSH_HOST=user@server                # just host, no path
 #   export SAE_MUC_REPO_PATH=/home/user/sae-muc        # default shown
+#   export SAE_MUC_GPU=4                               # nvtop index
 #   ./scripts/remote_run.sh configs/experiment/qwen05b_smoke.yaml
 #
 # What it does:
 #   1. ssh to the server
 #   2. git fetch + checkout feature/server-pipeline + pull
-#   3. uv sync (idempotent; cached after first run)
-#   4. launch `sae-muc run --config <cfg>` inside a new `tmux` session
+#   3. (re)build the docker image if needed
+#   4. launch `scripts/docker/run.sh <gpu> run --config <cfg>` inside tmux
 #   5. print the session name so you can attach with `ssh … tmux attach -t …`
 set -euo pipefail
 
 SSH_HOST=${SAE_MUC_SSH_HOST:?"set SAE_MUC_SSH_HOST (e.g. user@server)"}
 REPO_PATH=${SAE_MUC_REPO_PATH:-"~/sae-muc"}
 BRANCH=${SAE_MUC_BRANCH:-"feature/server-pipeline"}
+GPU=${SAE_MUC_GPU:?"set SAE_MUC_GPU (nvtop index of the GPU to use, e.g. 4)"}
+IMAGE=${SAE_MUC_IMAGE:-"sae-muc:latest"}
 CONFIG=${1:?"usage: $0 <config-yaml relative to repo root>"}
 
 SESSION="sae-muc-$(date +%Y%m%d-%H%M%S)"
@@ -27,10 +30,28 @@ cd "$REPO_PATH"
 git fetch origin
 git checkout "$BRANCH"
 git pull --ff-only
-uv sync --all-extras
 
+# Rebuild only if pyproject / uv.lock / Dockerfile changed since last build.
+NEED_BUILD=0
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    NEED_BUILD=1
+else
+    IMAGE_TS=\$(docker image inspect "$IMAGE" --format '{{.Created}}' | xargs -I{} date -d {} +%s)
+    for f in pyproject.toml uv.lock Dockerfile; do
+        if [[ -f "\$f" && \$(stat -c %Y "\$f") -gt \$IMAGE_TS ]]; then
+            NEED_BUILD=1
+            break
+        fi
+    done
+fi
+if [[ \$NEED_BUILD -eq 1 ]]; then
+    echo "==> rebuilding $IMAGE"
+    IMAGE="$IMAGE" scripts/docker/build.sh
+fi
+
+mkdir -p data
 tmux new-session -d -s "$SESSION" \\
-    "cd '$REPO_PATH' && uv run sae-muc run --config '$CONFIG' 2>&1 | tee -a data/run.log"
+    "cd '$REPO_PATH' && IMAGE='$IMAGE' scripts/docker/run.sh '$GPU' run --config '$CONFIG' 2>&1 | tee -a data/run.log"
 
 echo "tmux session launched: $SESSION"
 echo "attach: ssh $SSH_HOST tmux attach -t $SESSION"

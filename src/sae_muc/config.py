@@ -7,6 +7,7 @@ written alongside run artefacts for reproducibility.
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import json
 from pathlib import Path
@@ -229,9 +230,25 @@ class ExperimentConfig(_Frozen):
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(blob).hexdigest()
 
-    def build_run_id(self, timestamp: str) -> str:
-        """Build a human-readable run_id: `<dataset>_<model>_<timestamp>_<hash8>`."""
-        return f"{_slug(self.dataset.name)}_{_slug(self.model.name)}_{timestamp}_{self.config_hash()[:8]}"
+    def build_run_id(self, timestamp: str, *, user: str | None = None) -> str:
+        """Build a human-readable run_id: `<user>__<dataset>__<model>__<ts>__<hash8>`.
+
+        Username prefix attributes runs in shared storage (`/mnt/ssd/sae-muc/runs/`
+        on caniculus). `user` defaults to the current OS user; pass explicitly to
+        keep run-ids stable across hosts.
+        """
+        user_part = _slug(user or _current_user())
+        return (
+            f"{user_part}__{_slug(self.dataset.name)}__{_slug(self.model.name)}"
+            f"__{timestamp}__{self.config_hash()[:8]}"
+        )
+
+
+def _current_user() -> str:
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
 
 
 def _slug(s: str) -> str:

@@ -1,0 +1,54 @@
+# Keep the build context small and never bake secrets / heavy artefacts
+# into the image. The repo is bind-mounted at runtime, so we only need
+# enough source here to install the editable package.
+
+# Git
+.git/
+.gitattributes
+
+# Secrets — never inside an image
+.env
+.env.*
+
+# Run artefacts (gigabytes, gitignored)
+data/
+
+# Old prototype / reference materials — image doesn't need them
+archive/
+project_report*/
+*.pdf
+
+# Internal session docs (REVIEW/REPORT/ques/scratch)
+/docs/
+REVIEW*.md
+REPORT*.md
+ques*.md
+
+# Python build cruft
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local venv if any
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+.ipynb_checkpoints/
+
+# Docker artefacts themselves don't go inside the image
+Dockerfile
+.dockerignore
+
+# Per-developer Claude instructions stay local
+CLAUDE.md

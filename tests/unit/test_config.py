@@ -74,12 +74,14 @@ def test_build_run_id_format(tmp_path):
             "judge": {"provider": "fake", "model": "J"},
         }
     )
-    rid = cfg.build_run_id("20260423-150000")
-    parts = rid.split("_")
-    assert parts[0] == "nq"  # after slugification, the underscore ends a segment
-    # hash8 is the trailing segment of length 8
-    assert len(parts[-1]) == 8
-    assert "20260423" in rid
+    rid = cfg.build_run_id("20260423-150000", user="k.frolov")
+    parts = rid.split("__")
+    assert len(parts) == 5  # user, dataset, model, ts, hash8
+    assert parts[0] == "k_frolov"
+    assert parts[1] == "nq_open"
+    assert parts[2] == "mistral_7b"
+    assert parts[3] == "20260423-150000"
+    assert len(parts[4]) == 8
 
 
 def test_extends_merges_nested(tmp_path):
