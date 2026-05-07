@@ -97,6 +97,30 @@
 
 ## P3 — paper fidelity (нужно для воспроизведения цифр Tab.1–3)
 
+### Per-layer SAE registry — **HIGH PRIORITY** (блокер multi-layer SAE)
+- [ ] `SAEConfig` хранит одну `(release, sae_id)`, `ctx.sae` — один объект
+      на весь рантайм. SAE-методы (`sae_emd`, `sae_clamp`, `sae_projected`)
+      и стадия `sae_features` на multi-layer (`intervene.layer: list[int]`)
+      сейчас вызывают **тот же `ctx.sae` на всех слоях**, но Gemma-Scope /
+      Llama-Scope SAE — **per-layer** (каждый `layer_X/...` обучен на
+      residual'е именно слоя X). На слоях ≠ trained_layer encode/decode
+      даёт OOD-шум; multi-layer SAE-интервенция paper App E.1
+      (Llama 15-31 / Qwen 16-27) сейчас **невозможна корректно**.
+
+      Нужно:
+      1. Расширить `SAEConfig`: либо `layers: dict[int, {release, sae_id}]`,
+         либо общий `release` + `sae_id_template: "layer_{layer}/width_16k/canonical"`.
+      2. `ctx.saes: dict[int, SAEBackend]` lazy-load по слою (не грузить
+         всё сразу — каждая SAE ~50-200MB).
+      3. Поправить `intervene._build_per_layer_hooks` и `sae_features.run`,
+         чтобы брали `ctx.saes[layer]` вместо `ctx.sae`.
+      4. Validation: каждый `ctx.saes[layer].d_in == d_model` и `layer`
+         совпадает со слоем хука.
+      5. Тесты (FakeSAE per-layer mock на 2-3 слоях).
+
+      Workaround до фикса: SAE-методы на одном слое, multi-layer только
+      `linear_vuf` (см. `configs/experiment/gemma2_2b_multilayer_smoke.yaml`).
+
 ### Paper dataset splits — **review-flagged P3**
 - [ ] Использовать фиксированные train/val/test из Appendix B
       (10k/1k/1k на каждый датасет), а не `shuffle(seed).select(range(n))`.
