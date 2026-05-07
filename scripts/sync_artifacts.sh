@@ -5,16 +5,19 @@
 #   export SAE_MUC_SSH=user@server:/absolute/path/to/sae-muc
 #   ./scripts/sync_artifacts.sh <run_id>
 #
+# Run dir resolution:
+#   $SAE_MUC_RUNS_REMOTE/<run_id>/  if SAE_MUC_RUNS_REMOTE is set
+#   else $SAE_MUC_SSH/data/runs/<run_id>/  (legacy: per-user repo-local runs)
+#
+# On caniculus the team writes to shared storage at /mnt/ssd/sae-muc/runs.
+# Drop this in your shell rc once and forget it:
+#   export SAE_MUC_RUNS_REMOTE=user@caniculus:/mnt/ssd/sae-muc/runs
+#
 # By default only small artefacts (parquet / json / manifests) are pulled.
 # Hidden-state tensors and intervention/**/safetensors are excluded — they
 # are big and typically only needed for deep analysis. Pass --heavy to
 # also fetch safetensors.
 set -euo pipefail
-
-if [[ -z "${SAE_MUC_SSH:-}" ]]; then
-    echo "ERR: set SAE_MUC_SSH=user@server:/abs/path/to/sae-muc first" >&2
-    exit 1
-fi
 
 HEAVY=0
 RUN_ID=""
@@ -30,7 +33,16 @@ if [[ -z "$RUN_ID" ]]; then
     exit 1
 fi
 
-SRC="$SAE_MUC_SSH/data/runs/$RUN_ID/"
+if [[ -n "${SAE_MUC_RUNS_REMOTE:-}" ]]; then
+    SRC="${SAE_MUC_RUNS_REMOTE}/${RUN_ID}/"
+elif [[ -n "${SAE_MUC_SSH:-}" ]]; then
+    SRC="${SAE_MUC_SSH}/data/runs/${RUN_ID}/"
+else
+    echo "ERR: set SAE_MUC_RUNS_REMOTE=user@server:/abs/runs/path" >&2
+    echo "  or SAE_MUC_SSH=user@server:/abs/repo/path (legacy)" >&2
+    exit 1
+fi
+
 DST="data/runs/$RUN_ID/"
 mkdir -p "$DST"
 
