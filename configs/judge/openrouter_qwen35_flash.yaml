@@ -1,0 +1,9 @@
+# Qwen-3.5-Flash via OpenRouter. Faster + cheaper than qwen-2.5-72b for
+# judge tasks (decisiveness scoring + accuracy yes/no), and avoids the
+# Novita-routing 400 errors we hit on qwen-2.5-72b-instruct in the first
+# server smoke (resolves to Alibaba upstream). The model is reasoning-by-
+# default; OpenRouterBackend sets reasoning.enabled=false unconditionally,
+# so the 8/16 max_tokens judge budget is spent on the answer, not CoT.
+provider: openrouter
+model: qwen/qwen3.5-flash-02-23
+max_retries: 3

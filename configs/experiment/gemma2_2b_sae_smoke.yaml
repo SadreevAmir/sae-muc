@@ -16,7 +16,7 @@
 extends: ../base.yaml
 
 model: ../model/gemma2_2b_base.yaml
-judge: ../judge/openrouter_qwen25_72b.yaml
+judge: ../judge/openrouter_qwen35_flash.yaml
 nli: ../nli/deberta_v3_base.yaml
 
 dataset:

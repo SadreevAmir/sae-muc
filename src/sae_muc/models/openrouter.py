@@ -66,11 +66,19 @@ class OpenRouterBackend:
         return out
 
     def _create_with_retry(self, **kwargs):
+        # `reasoning.enabled=false` suppresses chain-of-thought tokens on
+        # OpenRouter's reasoning models (e.g. qwen3.5-flash). Our judge
+        # prompts cap completions at 8-16 tokens; reasoning models would
+        # blow that budget on hidden CoT and emit empty content. OpenRouter
+        # ignores this field for non-reasoning models, so it's safe by default.
+        extra_body = {"reasoning": {"enabled": False}}
         delay = 1.0
         last_exc: Exception | None = None
         for _ in range(self._max_retries):
             try:
-                return self._client.chat.completions.create(**kwargs)
+                return self._client.chat.completions.create(
+                    **kwargs, extra_body=extra_body
+                )
             except (RateLimitError, APIError) as e:
                 last_exc = e
                 time.sleep(delay)
