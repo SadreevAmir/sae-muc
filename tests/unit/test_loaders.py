@@ -70,15 +70,21 @@ def test_load_triviaqa_normalises_aliases(monkeypatch):
     assert wt.sample_id.startswith("triviaqa:validation:")
 
 
+def _patch_parquet(monkeypatch, rows: list[dict]) -> None:
+    """Install a fake `_hf_load_parquet` that returns a DataFrame of `rows`."""
+    import pandas as pd
+
+    df = pd.DataFrame(rows)
+    monkeypatch.setattr("sae_muc.data.loaders._hf_load_parquet", lambda *a, **k: df)
+
+
 def test_load_nq_open(monkeypatch):
-    _patch_hf(
+    _patch_parquet(
         monkeypatch,
-        {
-            "google-research-datasets/nq_open": [
-                {"question": "Q1", "answer": ["a1", "a2"]},
-                {"question": "Q2", "answer": ["b1"]},
-            ]
-        },
+        [
+            {"question": "Q1", "answer": ["a1", "a2"]},
+            {"question": "Q2", "answer": ["b1"]},
+        ],
     )
     cfg = DatasetConfig(name="nq_open", split="validation", n_samples=10, seed=0)
     samples = load_samples(cfg)
@@ -114,7 +120,7 @@ def test_load_popqa_parses_json_possible_answers(monkeypatch):
 
 def test_n_samples_caps_output(monkeypatch):
     rows = [{"question": f"q{i}", "answer": [f"a{i}"]} for i in range(20)]
-    _patch_hf(monkeypatch, {"google-research-datasets/nq_open": rows})
+    _patch_parquet(monkeypatch, rows)
 
     cfg = DatasetConfig(name="nq_open", split="validation", n_samples=5, seed=42)
     samples = load_samples(cfg)
@@ -123,7 +129,7 @@ def test_n_samples_caps_output(monkeypatch):
 
 def test_seed_makes_sampling_deterministic(monkeypatch):
     rows = [{"question": f"q{i}", "answer": [f"a{i}"]} for i in range(20)]
-    _patch_hf(monkeypatch, {"google-research-datasets/nq_open": rows})
+    _patch_parquet(monkeypatch, rows)
 
     cfg_a = DatasetConfig(name="nq_open", split="validation", n_samples=5, seed=42)
     cfg_b = DatasetConfig(name="nq_open", split="validation", n_samples=5, seed=42)

@@ -20,6 +20,21 @@ def _hf_load_dataset(repo: str, *args: Any, **kwargs: Any) -> Any:
     return load_dataset(repo, *args, **kwargs)
 
 
+def _hf_load_parquet(repo_id: str, filename: str) -> Any:
+    """Read a parquet shard directly from the HF Hub, bypassing `datasets`.
+
+    Returns a pandas DataFrame. Used for datasets whose hub card uses
+    feature types unknown to our pinned `datasets` version (e.g. NQ-Open's
+    `_type: 'List'` requires datasets >= 4.0, which conflicts with our
+    torch CU121 pin).
+    """
+    import pandas as pd
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(repo_id=repo_id, filename=filename, repo_type="dataset")
+    return pd.read_parquet(path)
+
+
 def load_samples(cfg: DatasetConfig) -> list[Sample]:
     """Load, shuffle deterministically, take the first `n_samples`, normalise."""
     if cfg.name == "triviaqa":
@@ -61,17 +76,26 @@ def _load_triviaqa(cfg: DatasetConfig) -> list[Sample]:
 
 
 def _load_nq_open(cfg: DatasetConfig) -> list[Sample]:
-    ds = _take(_hf_load_dataset("google-research-datasets/nq_open", split=cfg.split), cfg)
-    samples: list[Sample] = []
-    for i, row in enumerate(ds):
-        samples.append(
-            Sample(
-                sample_id=f"nq_open:{cfg.split}:{i}",
-                question=row["question"],
-                gold_answers=list(row["answer"]),
-            )
+    """Load NQ-Open by reading parquet directly from the HF Hub.
+
+    Bypasses `datasets.load_dataset` because the hub card uses the `List`
+    feature type (datasets >= 4.0 only), which conflicts with our torch
+    CU121 pin. The dataset has a single parquet shard per split.
+    """
+    df = _hf_load_parquet(
+        "google-research-datasets/nq_open",
+        f"nq_open/{cfg.split}-00000-of-00001.parquet",
+    )
+    df = df.sample(frac=1, random_state=cfg.seed).reset_index(drop=True)
+    df = df.head(cfg.n_samples)
+    return [
+        Sample(
+            sample_id=f"nq_open:{cfg.split}:{i}",
+            question=str(row["question"]),
+            gold_answers=list(row["answer"]),
         )
-    return samples
+        for i, row in df.iterrows()
+    ]
 
 
 def _load_fake(cfg: DatasetConfig) -> list[Sample]:
