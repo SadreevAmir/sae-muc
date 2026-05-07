@@ -27,8 +27,15 @@ RUN groupadd --gid ${USER_GID} ${USER_NAME} \
 
 # Keep the venv outside /app so a runtime bind-mount of the repo onto /app
 # does not shadow the installed dependencies.
+#
+# UV_PYTHON pins the interpreter version. Without it, uv picks the newest
+# stable (3.14 as of 2026-05) which has sparse wheel coverage — numpy 2.0.x
+# falls back to a meson source build that needs `cc`, which the cuda -base
+# image does not ship. 3.12 has full wheel coverage for torch / numpy /
+# scipy / sae-lens.
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    UV_PYTHON=3.12 \
     UV_LINK_MODE=copy \
     PATH=/opt/venv/bin:${PATH} \
     PYTHONUNBUFFERED=1
