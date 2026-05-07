@@ -23,6 +23,11 @@ dependencies = [
     "openai>=1.30",
     "python-dotenv>=1.0",
     "typer>=0.12",
+    # click 8.2 (May 2025) made `Parameter.make_metavar(ctx)` require ctx, which
+    # typer<0.13 doesn't pass → TypeError on `--help` / any parse error. We can't
+    # bump typer because transformer-lens (via sae-lens) caps it at <0.12.3, so
+    # cap click instead. Drop this once sae-lens loosens transformer-lens pin.
+    "click<8.2",
     "datasets>=2.19",
 ]
 
