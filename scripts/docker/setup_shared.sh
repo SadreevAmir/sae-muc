@@ -35,6 +35,12 @@ mkdir -p "${ROOT}/hf-cache" "${ROOT}/uv-cache" "${ROOT}/runs"
 chgrp -R "${GROUP}" "${ROOT}"
 chmod 2775 "${ROOT}" "${ROOT}/hf-cache" "${ROOT}/uv-cache" "${ROOT}/runs"
 
+# Repair drift: if the tree was already populated (e.g., a teammate ran
+# under default umask 022), older subdirs/files may not be group-writable
+# and won't carry setgid. Re-asserting fixes it idempotently.
+find "${ROOT}" -type d -exec chmod g+ws {} +
+find "${ROOT}" -type f -exec chmod g+w {} +
+
 echo "ready: ${ROOT}"
 echo
 ls -ld "${ROOT}" "${ROOT}"/*

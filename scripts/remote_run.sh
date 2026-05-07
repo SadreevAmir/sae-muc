@@ -19,7 +19,14 @@ SSH_HOST=${SAE_MUC_SSH_HOST:?"set SAE_MUC_SSH_HOST (e.g. user@server)"}
 REPO_PATH=${SAE_MUC_REPO_PATH:-"~/sae-muc"}
 BRANCH=${SAE_MUC_BRANCH:-"feature/server-pipeline"}
 GPU=${SAE_MUC_GPU:?"set SAE_MUC_GPU (nvtop index of the GPU to use, e.g. 4)"}
-IMAGE=${SAE_MUC_IMAGE:-"sae-muc:latest"}
+
+# Default image tag is derived from the SSH user (the server-side username)
+# so two teammates on the same host don't share a `:latest` tag with each
+# other's UID baked in. Falls back to local `id -un` if SSH_HOST has no user@.
+REMOTE_USER="${SSH_HOST%%@*}"
+[[ "$REMOTE_USER" == "$SSH_HOST" ]] && REMOTE_USER="$(id -un)"
+USER_TAG="$(echo "$REMOTE_USER" | tr '.A-Z' '_a-z')"
+IMAGE=${SAE_MUC_IMAGE:-"sae-muc:${USER_TAG}"}
 CONFIG=${1:?"usage: $0 <config-yaml relative to repo root>"}
 
 SESSION="sae-muc-$(date +%Y%m%d-%H%M%S)"

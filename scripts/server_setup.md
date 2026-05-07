@@ -64,11 +64,25 @@ Group `ipadocker` + setgid bit + container-side `umask 002` mean files
 written by any teammate are group-writable, so anyone can resume or
 extend a teammate's run via `--run-id <foreign>`.
 
-**Caveat.** `ipadocker` has ~300 members on caniculus — anyone with a
-server account technically can write to `/mnt/ssd/sae-muc/`. Run-ids
+**Caveat.** `ipadocker` has ~50 effective members on caniculus (verified
+2026-05-07: 49 of 54 active /home users). The alternative `docker(999)`
+is the same size (~52), so neither group offers real isolation — anyone
+with server access technically can read `/mnt/ssd/sae-muc/`. Run-ids
 are prefixed with the creator's username (`k.frolov__nq_open__…`), so
-ownership is at least visible in `ls runs/`. Don't put secrets here;
-`.env` stays per-user inside the repo (gitignored).
+ownership is at least visible in `ls runs/`.
+
+**Do not put secrets in shared storage.** Specifically:
+
+- `.env` stays per-user inside the repo (gitignored, also excluded from
+  the docker build context).
+- **Never run `huggingface-cli login` inside the container.** It writes
+  the token to `~/.cache/huggingface/token`, which inside the container
+  resolves to `/mnt/ssd/sae-muc/hf-cache/token` and would be readable by
+  ~50 people. Pass `HF_TOKEN` via `.env` instead — the HF library reads
+  the env var and skips the on-disk token entirely.
+- Same logic for any other provider login: keep credentials in `.env`,
+  never persist them under `~/.cache/`, `~/.config/`, or other paths
+  that overlap shared cache mounts.
 
 To run with personal storage instead (e.g., for noisy ablations you
 don't want polluting shared `runs/`):
@@ -88,11 +102,15 @@ container's `appuser` matches your host UID. Files written into
 `data/runs/` will be owned by you. First build takes ~5 minutes (torch
 + transformers + sae-lens), subsequent builds reuse the uv cache layer.
 
-Default tag is `sae-muc:latest`. Multi-tenant tip: each developer can
-tag their own image to avoid stomping each other's `latest`:
+**Default tag is per-user** (`sae-muc:k_frolov`, `sae-muc:d_koblov`, …)
+to prevent four teammates from stomping each other's baked-in UID on
+the shared `:latest`. `run.sh`/`shell.sh`/`remote_run.sh` derive the
+same tag from `id -un` (or the SSH username). Override only if you
+need a shared image:
 
 ```bash
-IMAGE=sae-muc:k.frolov scripts/docker/build.sh
+IMAGE=sae-muc:shared scripts/docker/build.sh
+IMAGE=sae-muc:shared scripts/docker/run.sh 4 ...
 ```
 
 ## 6. Pick a free GPU

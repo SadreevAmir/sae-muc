@@ -14,7 +14,8 @@ fi
 GPU_ID="$1"
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-IMAGE="${IMAGE:-sae-muc:latest}"
+USER_TAG="$(id -un | tr '.A-Z' '_a-z')"
+IMAGE="${IMAGE:-sae-muc:${USER_TAG}}"
 
 SHARED="${SAE_MUC_SHARED-/mnt/ssd/sae-muc}"
 
