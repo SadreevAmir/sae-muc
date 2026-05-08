@@ -201,6 +201,50 @@ def test_intervene_paper_range_uses_app_e1(fake_ctx):
     assert (meta["layers"] == "15-18").all()
 
 
+def test_intervene_paper_range_loud_fails_when_sae_missing(fake_ctx, monkeypatch):
+    """Per-layer SAE registry: paper_range that drifts past SAE coverage must
+    raise loudly (no silent narrowing). Mirrors the validator contract from
+    `models.sae.assert_sae_layers_available`.
+    """
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=tuple(range(15, 32)))
+
+    # Stub the sae-lens directory: this fictional release covers only layer 15.
+    class _Lookup:
+        saes_map = {"layer_15/x": "layer_15/x"}
+
+    monkeypatch.setattr(
+        "sae_lens.loading.pretrained_saes_directory.get_pretrained_saes_directory",
+        lambda: {"toy-release": _Lookup()},
+    )
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "model": fake_ctx.cfg.model.model_copy(update={"name": "fake-llama-7b"}),
+            "sae": fake_ctx.cfg.sae.model_copy(
+                update={
+                    "provider": "sae_lens",
+                    "release": "toy-release",
+                    "sae_id_template": "layer_{layer}/x",
+                }
+            ),
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"method": "sae_emd", "alpha_grid": [1.0], "layer": "paper_range"},
+                    ),
+                }
+            ),
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    with pytest.raises(ValueError, match=r"does not cover layers"):
+        intervene.run(fake_ctx)
+
+
 def test_intervene_sae_emd_requires_sae_features_artefact(fake_ctx):
     prepare.run(fake_ctx)
     generate.run(fake_ctx)

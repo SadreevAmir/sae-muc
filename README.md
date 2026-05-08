@@ -14,7 +14,8 @@ server-based pipeline. Work in progress on `feature/server-pipeline`.
 - `src/sae_muc/` — active pipeline code (config, models, data, pipeline
   stages, artefacts, analysis).
 - `configs/` — composable YAML configs (`model/`, `dataset/`, `judge/`,
-  `experiment/`).
+  `experiment/`); see [configs/README.md](configs/README.md) for the
+  reference + cookbook.
 - `scripts/` — orchestration helpers (rsync, server setup).
 - `tests/` — unit and integration tests; integration runs end-to-end on
   fake backends, no GPU required.

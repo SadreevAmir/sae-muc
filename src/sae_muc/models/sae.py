@@ -1,17 +1,41 @@
-"""SAE backends: minimal encode/decode interface for intervention hooks.
+"""SAE backends + per-layer registry for residual-stream interventions.
 
-`FakeSAEBackend` — fixed random linear projection, deterministic, for
-tests and offline smoke.
+Backends (`encode`/`decode` interface):
 
-`SAELensBackend` — pretrained SAE loaded lazily via `sae-lens`. sae-lens
-is an optional dependency (install with `uv sync --extra sae`); this
-class imports it only inside `_ensure_loaded()` so users who don't touch
-SAE branches never pay the install cost.
+  * `FakeSAEBackend` — fixed random linear projection, deterministic, for
+    tests and offline smoke.
+  * `SAELensBackend` — pretrained SAE loaded lazily via `sae-lens`. sae-lens
+    is an optional dependency (install with `uv sync --extra sae`); the
+    import lives inside `_ensure_loaded()` so non-SAE runs don't pay it.
+
+Multi-layer registry. Gemma-Scope and Llama-Scope SAEs are trained per
+residual-stream layer — `layer_15/...` is OOD on layer 20. Paper App E.1
+applies the linear-VUF / SAE intervention on a contiguous range of layers
+(Llama 15-31, Mistral 15-31, Qwen 16-27), so the pipeline keeps a
+`{layer: SAEBackend}` registry instead of a single `ctx.sae`. Helpers:
+
+  * `resolve_sae_id_for_layer(cfg, layer)` — pick the sae_id for `layer`
+    honouring `sae.sae_id_overrides > sae.sae_id_template > sae.sae_id`.
+  * `build_sae_registry(cfg, layers)` — `{layer: SAEBackend}`. sae-lens
+    backends stay lazy (weights load on first encode), so over-covering
+    candidate layers in `pipeline.context.build_context` is cheap.
+  * `assert_sae_layers_available(cfg, target_layers)` — validates each
+    resolved sae_id against `sae_lens.loading.pretrained_saes_directory`
+    before any encode is attempted, failing LOUD with a per-layer
+    breakdown when a target layer isn't covered (e.g. paper_range Llama
+    15-31 against a release that only ships layers 0..14).
+
+Why a hybrid sae_id resolution: Gemma-Scope / Llama-Scope follow a
+regular per-layer template (`layer_{layer}/width_16k/canonical`,
+`l{layer}r_32x`); `mistral-7b-res-wg` ships only layers 8/16/24, which
+overrides express directly. Legacy single-layer configs that set just
+`sae.sae_id` keep working (`gemma2_2b_sae_smoke.yaml`).
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -121,14 +145,103 @@ class SAELensBackend:
         return self._sae.decode(f)
 
 
+def resolve_sae_id_for_layer(cfg: "SAEConfig", layer: int) -> str:
+    """Pick the sae_id for `layer` honouring overrides > template > legacy sae_id.
+
+    Raises if none of the three is set — the SAEConfig is incomplete for sae-lens.
+    """
+    if layer in cfg.sae_id_overrides:
+        return cfg.sae_id_overrides[layer]
+    if cfg.sae_id_template:
+        return cfg.sae_id_template.format(layer=layer)
+    if cfg.sae_id is not None:
+        return cfg.sae_id
+    raise ValueError(
+        f"SAEConfig: no sae_id resolvable for layer={layer}. Set sae.sae_id "
+        f"(single-layer), sae.sae_id_template (e.g. 'layer_{{layer}}/width_16k/canonical'), "
+        f"or sae.sae_id_overrides[{layer}]."
+    )
+
+
+def build_sae_registry(
+    cfg: "SAEConfig", layers: Iterable[int]
+) -> dict[int, SAEBackend]:
+    """Build `{layer: SAEBackend}` for the given layers.
+
+    sae-lens backends stay lazy — weights load on the first encode/decode call,
+    so over-covering with too many candidate layers is cheap. For provider=fake,
+    each layer gets its own seed (cfg.seed + layer) so per-layer mock tests can
+    distinguish layers.
+    """
+    if cfg.provider == "fake":
+        return {
+            l: FakeSAEBackend(d_in=cfg.d_in, d_latent=cfg.d_latent, seed=cfg.seed + l)
+            for l in layers
+        }
+    if cfg.provider == "sae_lens":
+        if not cfg.release:
+            raise ValueError("`sae.release` is required when provider='sae_lens'")
+        return {
+            l: SAELensBackend(release=cfg.release, sae_id=resolve_sae_id_for_layer(cfg, l))
+            for l in layers
+        }
+    raise ValueError(f"Unknown SAE provider: {cfg.provider!r}")
+
+
+def assert_sae_layers_available(cfg: "SAEConfig", target_layers: list[int]) -> None:
+    """Validate that every `target_layers[i]` resolves to an sae_id present in
+    `pretrained_saes.yaml` for `cfg.release`. provider=fake → no-op.
+
+    Fails LOUD with a per-layer breakdown so paper_range / explicit-list configs
+    that drift past the release's coverage point the user at exactly which
+    layers are missing.
+    """
+    if cfg.provider == "fake":
+        return
+    from sae_lens.loading.pretrained_saes_directory import (
+        get_pretrained_saes_directory,
+    )
+
+    directory = get_pretrained_saes_directory()
+    if cfg.release not in directory:
+        raise ValueError(
+            f"sae.release={cfg.release!r} is not in the sae-lens registry "
+            f"({len(directory)} releases known; see sae_lens/pretrained_saes.yaml)."
+        )
+    saes_map = directory[cfg.release].saes_map
+    resolved = {l: resolve_sae_id_for_layer(cfg, l) for l in target_layers}
+    missing = [(l, sid) for l, sid in resolved.items() if sid not in saes_map]
+    if missing:
+        breakdown = "\n".join(
+            f"  layer {l} -> {sid} {'OK' if sid in saes_map else 'NOT FOUND'}"
+            for l, sid in resolved.items()
+        )
+        raise ValueError(
+            f"SAE release {cfg.release!r} does not cover layers "
+            f"{[l for l, _ in missing]} (requested target_layers={target_layers}).\n"
+            f"Resolved sae_ids:\n{breakdown}\n"
+            f"Adjust intervene.layer, switch sae.release, or set "
+            f"sae.sae_id_overrides for the missing layers."
+        )
+
+
 def build_sae_backend(cfg: "SAEConfig") -> SAEBackend:
-    """Dispatch on `cfg.provider`."""
+    """Single-backend dispatch — kept for legacy single-layer paths.
+
+    Prefer `build_sae_registry(cfg, layers)` for new code; this wrapper just
+    materialises a single backend at layer-id 0 (for fake) or via the resolved
+    sae_id (for sae_lens).
+    """
     if cfg.provider == "fake":
         return FakeSAEBackend(d_in=cfg.d_in, d_latent=cfg.d_latent, seed=cfg.seed)
     if cfg.provider == "sae_lens":
-        if not cfg.release or not cfg.sae_id:
+        if not cfg.release:
+            raise ValueError("`sae.release` is required when provider='sae_lens'")
+        sae_id = cfg.sae_id or cfg.sae_id_template
+        if not sae_id or "{layer}" in sae_id:
             raise ValueError(
-                "`sae.release` and `sae.sae_id` are required when provider='sae_lens'"
+                "`sae.sae_id` (or a layer-free sae_id_template) is required for the "
+                "single-backend dispatch when provider='sae_lens'."
             )
-        return SAELensBackend(release=cfg.release, sae_id=cfg.sae_id)
+        return SAELensBackend(release=cfg.release, sae_id=sae_id)
     raise ValueError(f"Unknown SAE provider: {cfg.provider!r}")

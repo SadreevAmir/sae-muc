@@ -178,6 +178,44 @@ def test_sae_features_warns_on_tiny_splits(fake_ctx, caplog):
     assert any("tiny splits" in r.getMessage() for r in caplog.records)
 
 
+def test_sae_features_uses_per_layer_sae(fake_ctx):
+    """Multi-layer run must consult `ctx.saes[layer]` per layer, not a shared SAE.
+
+    With seed-per-layer FakeSAE the encoders for layers 1 and 2 are different,
+    so identical inputs must produce different per-layer Cohen's d values.
+    """
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "sae_features": fake_ctx.cfg.stages.sae_features.model_copy(
+                        update={"k_top": 3}
+                    ),
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"layer": [1, 2], "method": "sae_emd"}
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    _seed_sae_features_inputs(fake_ctx)
+    # Add identical hidden states for layer 2 — only the SAE at the layer differs.
+    layer1 = fake_ctx.store.load_safetensors("hidden_states/layer_1.safetensors")
+    fake_ctx.store.save_safetensors("hidden_states/layer_2.safetensors", layer1)
+
+    sae_features.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("sae_features/stats.parquet")
+
+    assert set(df["layer"].unique()) == {1, 2}
+    # Identical inputs through different SAE encoders → different Cohen's d
+    # (would be exactly equal if the same SAE were used on both layers).
+    d1 = df[df["layer"] == 1].sort_values("feature_id")["cohen_d"].to_numpy()
+    d2 = df[df["layer"] == 2].sort_values("feature_id")["cohen_d"].to_numpy()
+    assert not (d1 == d2).all(), "per-layer SAE registry not wired through"
+
+
 def test_sae_features_raises_on_d_in_mismatch(fake_ctx):
     """Regression for I3: a wrong SAEConfig.d_in must fail loudly with a clear
     message instead of crashing inside torch matmul during sae.encode."""
@@ -196,13 +234,16 @@ def test_sae_features_raises_on_d_in_mismatch(fake_ctx):
         }
     )
     object.__setattr__(fake_ctx, "cfg", new_cfg)
-    # Rebuild the SAE backend so it reflects the updated d_in.
-    from sae_muc.models.sae import build_sae_backend
+    # Rebuild the per-layer SAE registry so it reflects the updated d_in.
+    from sae_muc.models.sae import build_sae_registry
 
-    object.__setattr__(fake_ctx, "sae", build_sae_backend(new_cfg.sae))
+    new_saes = build_sae_registry(new_cfg.sae, list(fake_ctx.saes.keys()))
+    object.__setattr__(fake_ctx, "saes", new_saes)
 
     _seed_sae_features_inputs(fake_ctx)
-    with pytest.raises(ValueError, match="SAE.d_in=4 != model hidden size d_model=8"):
+    with pytest.raises(
+        ValueError, match=r"SAE\(layer=1\)\.d_in=4 != model hidden size d_model=8"
+    ):
         sae_features.run(fake_ctx)
 
 

@@ -1,15 +1,17 @@
-# Server smoke: SAE-pipeline test on Gemma-2-2B (base) + Gemma-Scope SAE at
-# layer 20. Goal is plumbing — exercise sae-lens loading, the sae_features
-# stage, and the sae_emd intervene hook end-to-end on real CUDA. Single
-# layer; the multi-layer counterpart is `gemma2_2b_sae_multilayer_smoke.yaml`.
+# Server smoke: multi-layer SAE intervention on Gemma-2-2B (base) with
+# Gemma-Scope per-layer SAEs at layers 18-22. Exercises the per-layer SAE
+# registry (TODO P3): `sae_id_template` expands to one sae-lens loader per
+# layer, `intervene.run` applies a per-layer SAE in the hook, and
+# `assert_sae_layers_available` validates that every requested layer exists
+# in the release.
 #
 # alpha_grid:
 #   0.0 — sanity check that encode→decode→err-inject keeps generation sane.
-#   1.0 — actually applies the cohen_d-weighted SAE shift.
+#   1.0 — applies the cohen_d-weighted SAE shift on every of the 5 layers.
 #
 # Requires HF_TOKEN (Gemma-2 license accepted) and OPENROUTER_API_KEY in .env.
 #
-# Run:  scripts/docker/run.sh <gpu_idx> run --config configs/experiment/gemma2_2b_sae_smoke.yaml
+# Run:  scripts/docker/run.sh <gpu_idx> run --config configs/experiment/gemma2_2b_sae_multilayer_smoke.yaml
 
 extends: ../base.yaml
 
@@ -26,7 +28,7 @@ dataset:
 sae:
   provider: sae_lens
   release: gemma-scope-2b-pt-res-canonical
-  sae_id: layer_20/width_16k/canonical
+  sae_id_template: "layer_{layer}/width_16k/canonical"
 
 stages:
   generate:
@@ -35,7 +37,7 @@ stages:
     temperature_high: 1.0
     max_new_tokens: 40
   vuf:
-    layers: [20]
+    layers: [18, 19, 20, 21, 22]
     # top_n on n=10: vu_threshold default would mostly trigger the empty-split
     # fallback. Explicit top_n keeps the smoke deterministic.
     selection: top_n
@@ -49,7 +51,7 @@ stages:
     method: sae_emd
     mode: fixed
     alpha_grid: [0.0, 1.0]
-    layer: 20
+    layer: [18, 19, 20, 21, 22]
     sae_emd_delta: cohen_d
 
 seed: 42

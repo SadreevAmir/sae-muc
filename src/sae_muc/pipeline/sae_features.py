@@ -16,7 +16,7 @@ selection from `sae_features/stats.parquet`, keyed by `layer`.
 
 Required upstream stages: vuf (for `vuf/splits.parquet`,
 `vuf/meta.parquet`) and hidden_states (for the per-sample layer tensor).
-SAE comes from `ctx.sae`.
+SAE comes from `ctx.saes[layer]` — Gemma-Scope / Llama-Scope are per-layer.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from sae_muc.models.sae import assert_sae_layers_available
 from sae_muc.pipeline._utils import _pool, _resolve_layers
 from sae_muc.pipeline.context import PipelineContext
 
@@ -163,12 +164,14 @@ def run(ctx: PipelineContext) -> list[str]:
     target_layers = _resolve_layers(
         intervene_cfg.layer, available, model_name=ctx.cfg.model.name
     )
+    assert_sae_layers_available(ctx.cfg.sae, target_layers)
 
     hs_meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
-    k = min(int(sae_feat_cfg.k_top), ctx.sae.d_latent)
     rows: list[dict] = []
 
     for target_layer in target_layers:
+        sae = ctx.saes[target_layer]
+        k = min(int(sae_feat_cfg.k_top), sae.d_latent)
         tensors = ctx.store.load_safetensors(f"hidden_states/layer_{target_layer}.safetensors")
 
         # The SAE's encoder weights expect a fixed input dimensionality. With
@@ -177,11 +180,11 @@ def run(ctx: PipelineContext) -> list[str]:
         # matmul shape error deep inside `sae.encode`. Surface it up front.
         sample_tensor = next(iter(tensors.values()))
         d_model = int(sample_tensor.shape[-1])
-        if ctx.sae.d_in != d_model:
+        if sae.d_in != d_model:
             raise ValueError(
-                f"SAE.d_in={ctx.sae.d_in} != model hidden size d_model={d_model}; "
-                f"either use provider=sae_lens (which infers d_in from the SAE) "
-                f"or set sae.d_in to {d_model} in the config."
+                f"SAE(layer={target_layer}).d_in={sae.d_in} != model hidden size "
+                f"d_model={d_model}; either use provider=sae_lens (which infers "
+                f"d_in from the SAE) or set sae.d_in to {d_model} in the config."
             )
 
         def pooled(sid: str, _tensors=tensors) -> "torch.Tensor":
@@ -198,11 +201,11 @@ def run(ctx: PipelineContext) -> list[str]:
             "encoding %d uncertain + %d certain samples through SAE (layer %d, d_in=%d, "
             "d_latent=%d); k_top=%d",
             len(uncertain_ids), len(certain_ids), target_layer,
-            ctx.sae.d_in, ctx.sae.d_latent, k,
+            sae.d_in, sae.d_latent, k,
         )
 
-        f_u = ctx.sae.encode(X_u)
-        f_c = ctx.sae.encode(X_c)
+        f_u = sae.encode(X_u)
+        f_c = sae.encode(X_c)
         d = _cohens_d(f_u, f_c)
 
         if sae_feat_cfg.selection_mode == "consensus":
@@ -236,7 +239,7 @@ def run(ctx: PipelineContext) -> list[str]:
 
         mean_u = f_u.mean(dim=0)
         mean_c = f_c.mean(dim=0)
-        for i in range(ctx.sae.d_latent):
+        for i in range(sae.d_latent):
             if i in uncertainty_idx:
                 selected = "uncertainty"
             elif i in certainty_idx:

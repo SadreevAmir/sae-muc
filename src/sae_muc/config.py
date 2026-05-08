@@ -204,6 +204,16 @@ class SAEConfig(_Frozen):
     case d_in/d_latent are ignored — they come from the SAE config. For
     the fake backend, d_in must match the hidden-state dimensionality of
     the generator model (e.g. 896 for Qwen2.5-0.5B; 8 for FakeBackend).
+
+    Per-layer SAE selection (Gemma-Scope / Llama-Scope are trained per layer):
+    - `sae_id` — single SAE for the whole run (legacy, for one-layer configs).
+    - `sae_id_template` — string with `{layer}` placeholder, expanded per
+      requested layer (e.g. `"layer_{layer}/width_16k/canonical"`).
+    - `sae_id_overrides` — explicit per-layer mapping; wins over the template,
+      and is the only way to express sparse releases like `mistral-7b-res-wg`
+      that only ship SAEs for layers 8/16/24.
+    Resolution priority (see `models.sae.resolve_sae_id_for_layer`):
+    overrides > template > legacy `sae_id`.
     """
 
     provider: Literal["fake", "sae_lens"] = "fake"
@@ -212,6 +222,8 @@ class SAEConfig(_Frozen):
     seed: int = 42
     release: str | None = None
     sae_id: str | None = None
+    sae_id_template: str | None = None
+    sae_id_overrides: dict[int, str] = Field(default_factory=dict)
 
 
 class ExperimentConfig(_Frozen):

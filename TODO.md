@@ -205,6 +205,16 @@
       На FakeBackend проверены multi-layer hooks (C2), `last_k_tokens`
       slicing (C7), `torch.manual_seed` (C8); реальное поведение на CUDA
       / на реальной архитектуре HF-модели не запускалось.
+- [ ] **Live smoke на Mistral-7B + sparse SAE overrides** (per-layer SAE
+      registry, sparse-coverage кейс). `mistral-7b-res-wg` покрывает только
+      слои 8/16/24; resolver/validator/registry проверены unit-тестами и
+      validator пройден против живого реестра sae-lens, но end-to-end на
+      CUDA с реальной загрузкой 2-3 SAE не запускался. План: собрать
+      `configs/experiment/mistral7b_sae_sparse_smoke.yaml` с
+      `sae_id_overrides: {16: ..., 24: ...}` и `intervene.layer: [16, 24]`,
+      прогнать на сервере, убедиться что в логах intervene видно загрузку
+      разных sae_id на разных слоях, а `sae_features/stats.parquet`
+      содержит строки для обоих слоёв.
 - [ ] **Migration script для legacy `intervention/meta.parquet`.**
       После C2 колонка `layer: int` → `layers: str`. Старые ран-папки
       несовместимы при дозапуске `evaluate_post`. Делать **только если

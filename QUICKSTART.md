@@ -67,7 +67,9 @@ export SAE_MUC_SSH=user@server:/home/you/sae-muc
 ## Common operations
 
 - **Switch config** — change `--config` argument; each config resolves into
-  one `data/runs/<run_id>/`.
+  one `data/runs/<run_id>/`. Schema reference, composition rules
+  (`extends:`, fragment refs), and ready-to-edit recipes live in
+  [`configs/README.md`](configs/README.md).
 - **Read a parquet artefact:**
   ```python
   import pandas as pd

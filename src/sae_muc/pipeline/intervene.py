@@ -20,6 +20,14 @@ Two modes (selected via `cfg.stages.intervene.mode`):
                                                  su_norm, alpha)
 
 Summary meta (paths, layers, method, mode) in `intervention/meta.parquet`.
+
+Per-layer SAE. `cfg.stages.intervene.layer` may be a list (paper App E.1
+ranges, e.g. Llama 15-31). For SAE-based methods (`sae_emd`, `sae_clamp`,
+`sae_projected`) the hook at each layer uses the SAE registered for that
+specific layer in `ctx.saes` — Gemma-Scope and Llama-Scope are trained
+per residual layer, so reusing one SAE across layers produces OOD noise.
+Validation against the sae-lens release happens in `run()` via
+`assert_sae_layers_available` before any forward.
 """
 
 from __future__ import annotations
@@ -31,8 +39,11 @@ import numpy as np
 import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
+from sae_muc.models.sae import assert_sae_layers_available
 from sae_muc.pipeline._utils import _resolve_layers
 from sae_muc.pipeline.context import PipelineContext
+
+_SAE_METHODS = ("sae_emd", "sae_clamp", "sae_projected")
 
 if TYPE_CHECKING:
     import torch
@@ -295,7 +306,7 @@ def _build_per_layer_hooks(
     for layer in layers:
         layer_stats = per_layer[layer] if per_layer is not None else None
         hook_fn = _build_hook_dispatch(
-            cfg.method, directions[layer], alpha, ctx.sae,
+            cfg.method, directions[layer], alpha, ctx.saes[layer],
             layer_stats=layer_stats,
             sae_emd_delta=cfg.sae_emd_delta,
         )
@@ -561,6 +572,9 @@ def run(ctx: PipelineContext) -> list[str]:
     vuf_meta = ctx.store.load_parquet("vuf/meta.parquet")
     available = sorted(int(x) for x in vuf_meta["layer"].tolist())
     target_layers = _resolve_layers(cfg.layer, available, model_name=ctx.cfg.model.name)
+
+    if cfg.method in _SAE_METHODS:
+        assert_sae_layers_available(ctx.cfg.sae, target_layers)
 
     directions: dict[int, "torch.Tensor"] = {
         layer: ctx.store.load_safetensors(
