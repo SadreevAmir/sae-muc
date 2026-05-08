@@ -1,0 +1,74 @@
+# Server smoke: paper-shape MUC on Mistral-7B-Instruct-v0.3 with sparse SAE
+# coverage. mistral-7b-res-wg ships only 3 layers (8/16/24, residual_pre,
+# absolute paths — not a regular template), so this exercises the
+# `sae_id_overrides` path of the per-layer SAE registry (TODO P3 done in
+# ccd4319). The chosen layers are NOT App E.1 paper_range (Mistral 15-31)
+# because the release doesn't cover those — explicit list instead.
+#
+# Approach is paper-faithful otherwise:
+#   * adaptive intervene: per-question α = clip(SU_norm − VU, 0, α_max),
+#     α_max=0.4 from App G.1 for Mistral-7B.
+#   * combined detector (verbal + semantic + hidden), paper Tab.1 best AUROC.
+#   * paper-default generation (n=10 samples, max_new_tokens=40, T=0.1/1.0).
+#
+# gate_by_detector=false on this first pass — we want intervene applied on
+# every question to compare before/after across the full set, not just on
+# the detector-flagged subset. Flip to true once the detector's calibration
+# is validated.
+#
+# Requires HF_TOKEN with mistralai/Mistral-7B-Instruct-v0.3 license accepted
+# and OPENROUTER_API_KEY in .env.
+#
+# Run:  scripts/docker/run.sh <gpu_idx> run --config configs/experiment/mistral7b_sae_sparse_smoke.yaml
+
+extends: ../base.yaml
+
+model: ../model/mistral7b.yaml
+judge: ../judge/openrouter_qwen35_flash.yaml
+nli: ../nli/deberta_v3_base.yaml
+
+dataset:
+  name: nq_open
+  split: validation
+  n_samples: 50
+  seed: 0
+
+sae:
+  provider: sae_lens
+  release: mistral-7b-res-wg
+  # sparse: 3 layers, absolute hook paths (no {layer} template fits).
+  sae_id_overrides:
+    8: blocks.8.hook_resid_pre
+    16: blocks.16.hook_resid_pre
+    24: blocks.24.hook_resid_pre
+
+stages:
+  generate:
+    n_samples: 10              # paper-default for SE clustering
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 40
+  vuf:
+    layers: [8, 16, 24]
+    # n=50 is enough for top_n with reasonable groups; vu_threshold (≥0.9 / ≤0.05)
+    # would be sparser and trip the empty-split fallback.
+    selection: top_n
+    n_top: 20
+    n_bot: 20
+    pooling: last_token_q
+  sae_features:
+    k_top: 16
+    selection_mode: topk
+  detect:
+    # paper Tab.1 best AUROC = combined (vu, se, hidden).
+    detector_method: combined
+  intervene:
+    method: sae_emd
+    mode: adaptive
+    # paper App G.1 per-model α_max: Llama 1.0, Mistral 0.4, Qwen 3.0.
+    alpha_max: 0.4
+    layer: [8, 16, 24]
+    sae_emd_delta: cohen_d
+    gate_by_detector: false
+
+seed: 42
