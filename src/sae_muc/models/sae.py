@@ -121,6 +121,21 @@ class SAELensBackend:
         elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
             sae = sae.to("mps")
 
+        # Workaround for sae-lens StandardSAE bug: run_time_activation_norm_fn_out
+        # does `x = x / self.x_norm_coeff; del self.x_norm_coeff`, so any decode()
+        # not immediately followed by another encode() crashes with AttributeError.
+        # Our intervene hook does `encode → decode → decode(f + α·δ)` — the second
+        # decode lacks x_norm_coeff because the first decode deleted it. Mistral
+        # SAEs (mistral-7b-res-wg) use constant_norm_rescale; Gemma-Scope doesn't,
+        # which is why we only hit this on Mistral. Replace the deleting variant
+        # with a non-deleting one — safe because x_norm_coeff matches input shape
+        # and our f / f_new have identical shape, so the cached coeff is correct.
+        # See sae_lens/saes/sae.py:325-328 (still buggy in 6.5.3).
+        if getattr(sae.cfg, "normalize_activations", None) == "constant_norm_rescale":
+            def _patched_norm_out(x, _sae=sae):
+                return x / _sae.x_norm_coeff
+            sae.run_time_activation_norm_fn_out = _patched_norm_out
+
         self._sae = sae
         self._d_in = int(sae.cfg.d_in)
         self._d_latent = int(sae.cfg.d_sae)
