@@ -1,0 +1,59 @@
+# Server smoke: SAE intervention on the late half of Gemma-2-2B (layers 15-25,
+# 11 layers — analogous to paper App E.1 ranges Llama 15-31 / Qwen 16-27).
+# Per-layer Gemma-Scope SAE wired through the registry (TODO P3 done in
+# ccd4319). Compared to gemma2_2b_sae_multilayer_smoke.yaml (5 layers, 18-22)
+# this exercises the wider band and a stronger α=3.0 to see if SAE shift
+# escapes the greedy fixed-point we saw in the 1-layer / α=1 smoke (where
+# baseline and α=1 generations were byte-identical).
+#
+# alpha_grid:
+#   0.0 — sanity check that encode→decode→err-inject keeps generation sane.
+#   1.0 — α-1 baseline (matches the 5-layer smoke for direct comparison).
+#   3.0 — bigger shift; expect greedy to start diverging from baseline.
+#
+# Requires HF_TOKEN (Gemma-2 license accepted) and OPENROUTER_API_KEY in .env.
+#
+# Run:  scripts/docker/run.sh <gpu_idx> run --config configs/experiment/gemma2_2b_sae_multilayer_15_25_smoke.yaml
+
+extends: ../base.yaml
+
+model: ../model/gemma2_2b_base.yaml
+judge: ../judge/openrouter_qwen35_flash.yaml
+nli: ../nli/deberta_v3_base.yaml
+
+dataset:
+  name: nq_open
+  split: validation
+  n_samples: 10
+  seed: 0
+
+sae:
+  provider: sae_lens
+  release: gemma-scope-2b-pt-res-canonical
+  sae_id_template: "layer_{layer}/width_16k/canonical"
+
+stages:
+  generate:
+    n_samples: 4
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 40
+  vuf:
+    layers: [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+    # top_n on n=10: vu_threshold default would mostly trigger the empty-split
+    # fallback. Explicit top_n keeps the smoke deterministic.
+    selection: top_n
+    n_top: 4
+    n_bot: 4
+    pooling: last_token_q
+  sae_features:
+    k_top: 8
+    selection_mode: topk
+  intervene:
+    method: sae_emd
+    mode: fixed
+    alpha_grid: [0.0, 1.0, 3.0]
+    layer: [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+    sae_emd_delta: cohen_d
+
+seed: 42
