@@ -121,6 +121,48 @@
       Workaround до фикса: SAE-методы на одном слое, multi-layer только
       `linear_vuf` (см. `configs/experiment/gemma2_2b_multilayer_smoke.yaml`).
 
+### SAE activation normalization — investigation (может влиять на результаты)
+- [ ] Разобраться, что `cfg.normalize_activations` делает в каждом релизе и
+      как это взаимодействует с нашим `sae_emd` / `sae_clamp` / `sae_projected`.
+      sae-lens StandardSAE имеет 3 ветки в `sae_lens/saes/sae.py:319-356`:
+      `"constant_norm_rescale"` (per-token L2-rescale к √d_in), `"layer_norm"`
+      (классический LN с mu/std), и no-op (identity) — у разных релизов
+      встречаются все три.
+
+      Важные точки разобрать:
+      1. **Когда state SAE-объекта (x_norm_coeff / ln_mu / ln_std) корректен,
+         а когда стейл.** Сейчас в commit'е 1c21e9f мы пропатчили
+         `run_time_activation_norm_fn_out` — убрали `del self.x_norm_coeff`,
+         чтобы второй `decode()` в одном hook не падал. Это безопасно если
+         `f` и `f_new` имеют одинаковую shape; если когда-то будем менять
+         batch/seq между парами encode/decode — патч сломается тихо.
+      2. **Какой режим у каждого pretrained релиза, который мы используем.**
+         `gemma-scope-2b-pt-res-canonical` — no-op (нормализация запечена в
+         веса DeepMind'ом при тренировке). `mistral-7b-res-wg` —
+         `constant_norm_rescale`. Llama-Scope — TBD, проверить перед первым
+         Llama-смок'ом. Qwen-andyrdt, Pythia — TBD.
+      3. **Корректность `sae_emd` δ под constant_norm_rescale.** Мы строим
+         δ из cohen_d на латентах, потом `f' = f + α·δ`. Но если у нас
+         нормализатор на входе (`x' = x · c`), то `f` обусловлено
+         нормированным входом, и `f'` живёт в той же нормированной системе.
+         Когда `decode` денормирует через `/c`, эффект нашего сдвига
+         в residual stream получает фактор `1/c`. Не уверен — надо
+         посчитать на бумаге, что мы реально подмешиваем в residual для
+         двух разных режимов normalize_activations и эквивалентны ли они.
+      4. **Cohen's d в `sae_features` под нормализацией.** Encode'им
+         pooled hidden states одной партией — `x_norm_coeff` пересчитывается
+         на каждом encode. Нормализация per-batch, и Cohen's d считается
+         между двумя группами с разными средними норм — может дать
+         артефакты, не отражающие реальное различие в латентах.
+      5. **Old prototype** (archive/old-prototype) — как они работали с
+         нормализацией? Возможно использовали другой режим, и наши
+         результаты на Mistral расходятся именно из-за этого.
+
+      Никакого блокера; просто здоровая паранойя — paper-сравнения через
+      MUC с реальными SAE могут смещаться от выбора `normalize_activations`,
+      и нужно понимать когда наш sae_emd-сдвиг семантически тот же, что
+      paper'ная linear_vuf-интервенция, а когда нет.
+
 ### Paper dataset splits — **review-flagged P3**
 - [ ] Использовать фиксированные train/val/test из Appendix B
       (10k/1k/1k на каждый датасет), а не `shuffle(seed).select(range(n))`.
