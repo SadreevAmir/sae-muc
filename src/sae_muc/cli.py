@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
 
+from sae_muc.logging_setup import add_file_handler as _add_file_handler
 from sae_muc.logging_setup import configure as _configure_logging
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -51,14 +53,27 @@ def run(
     typer.echo(f"run_id: {rid}")
     typer.echo(f"run_dir: {ctx.store.run_dir}")
 
-    if stage == "all":
-        run_all(ctx, force_all=force_all)
-    else:
-        if stage not in STAGES:
-            raise typer.BadParameter(
-                f"Unknown stage {stage!r}. Known: {sorted(STAGES)}"
-            )
-        run_stage(ctx, stage, force=force_all)
+    # File log lives in the run dir so artefacts and logs sit together in
+    # shared storage. Append-mode: resumes via --run-id accumulate history.
+    # tail -f /mnt/ssd/sae-muc/runs/<run_id>/run.log from any ssh session.
+    file_handler = _add_file_handler(ctx.store.run_dir / "run.log")
+    log = logging.getLogger("sae_muc.cli")
+    log.info("run_id: %s", rid)
+    log.info("run_dir: %s", ctx.store.run_dir)
+    log.info("config: %s", config)
+
+    try:
+        if stage == "all":
+            run_all(ctx, force_all=force_all)
+        else:
+            if stage not in STAGES:
+                raise typer.BadParameter(
+                    f"Unknown stage {stage!r}. Known: {sorted(STAGES)}"
+                )
+            run_stage(ctx, stage, force=force_all)
+    finally:
+        logging.getLogger().removeHandler(file_handler)
+        file_handler.close()
 
 
 if __name__ == "__main__":

@@ -100,3 +100,16 @@ def configure(level: str | int = "INFO") -> None:
 
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def add_file_handler(path) -> logging.FileHandler:
+    """Add a no-color FileHandler to the root logger and return it.
+
+    Caller owns the handler — remove with `logging.getLogger().removeHandler(h)`
+    and `h.close()` in a finally-block. Append-mode so resumes via --run-id
+    accumulate the full run history in one file.
+    """
+    fh = logging.FileHandler(str(path), mode="a", encoding="utf-8")
+    fh.setFormatter(_Formatter(color=False))
+    logging.getLogger().addHandler(fh)
+    return fh
