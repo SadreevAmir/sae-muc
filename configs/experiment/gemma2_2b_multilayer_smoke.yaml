@@ -1,0 +1,41 @@
+# Server smoke: multi-layer hook test on Gemma-2-2B (base) with paper-style
+# linear_vuf intervention on layers 20-25 (late half of the 26-layer model,
+# analogous to paper App E.1 ranges Llama 15-31 / Qwen 16-27). SAE is
+# intentionally NOT used — linear_vuf is the paper's primary intervention
+# and works on any residual layer without per-layer SAE alignment, so this
+# smoke exercises the multi-layer hook mechanism without the per-layer SAE
+# limitation (see TODO P3).
+#
+# Run:  scripts/docker/run.sh <gpu_idx> run --config configs/experiment/gemma2_2b_multilayer_smoke.yaml
+
+extends: ../base.yaml
+
+model: ../model/gemma2_2b_base.yaml
+judge: ../judge/openrouter_qwen35_flash.yaml
+nli: ../nli/deberta_v3_base.yaml
+
+dataset:
+  name: nq_open
+  split: validation
+  n_samples: 10
+  seed: 0
+
+stages:
+  generate:
+    n_samples: 4
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 40
+  vuf:
+    layers: [20, 21, 22, 23, 24, 25]
+    selection: top_n
+    n_top: 4
+    n_bot: 4
+    pooling: last_token_q
+  intervene:
+    method: linear_vuf
+    mode: fixed
+    alpha_grid: [0.0, 1.0]
+    layer: [20, 21, 22, 23, 24, 25]
+
+seed: 42

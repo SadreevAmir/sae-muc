@@ -1,0 +1,5 @@
+# In-memory synthetic QA pairs (`_load_fake` in data/loaders.py). No network.
+name: fake
+split: validation
+n_samples: 5
+seed: 0

@@ -6,3 +6,5 @@ pandas
 numpy>=2.0.0,<2.1
 tqdm
 jsonlines
+scikit-learn>=1.4
+scipy

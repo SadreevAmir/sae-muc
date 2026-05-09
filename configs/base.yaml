@@ -1,0 +1,24 @@
+# Default values shared by all experiments. Override in experiment YAMLs via `extends: ../base.yaml`.
+
+seed: 42
+data_root: data
+
+nli:
+  provider: hf_local
+  model: microsoft/deberta-v2-xxlarge-mnli
+
+stages:
+  generate:
+    n_samples: 10
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 100
+  vuf:
+    layers: auto
+    n_top: 250
+    n_bot: 250
+    pooling: last_token_q
+  intervene:
+    method: linear_vuf
+    alpha_grid: [-1.0, -0.5, 0.0, 0.5, 1.0]
+    alpha_max: 1.0

@@ -1,0 +1,4 @@
+# Paper default generator (Qwen family).
+provider: hf_local
+name: Qwen/Qwen2.5-7B-Instruct
+dtype: bfloat16

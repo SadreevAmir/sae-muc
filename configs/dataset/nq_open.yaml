@@ -1,0 +1,7 @@
+# NQ-Open via HF datasets (google-research-datasets/nq_open). Validation
+# split has 3610 questions. Paper samples 1000 for eval; experiment YAMLs
+# typically override `n_samples` to scale up or down.
+name: nq_open
+split: validation
+n_samples: 500
+seed: 42

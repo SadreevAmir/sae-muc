@@ -1,0 +1,4 @@
+# Paper default generator (Mistral family). Gated — `huggingface-cli login` required.
+provider: hf_local
+name: mistralai/Mistral-7B-Instruct-v0.3
+dtype: bfloat16

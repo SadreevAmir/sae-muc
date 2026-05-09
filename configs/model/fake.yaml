@@ -1,0 +1,5 @@
+# Deterministic in-process stub — no network, no GPU. Use for unit tests
+# and for the `--fake` smoke without loading real weights.
+provider: fake
+name: fake-7b
+dtype: bfloat16

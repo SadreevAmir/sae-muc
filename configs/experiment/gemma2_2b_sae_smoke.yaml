@@ -1,0 +1,55 @@
+# Server smoke: SAE-pipeline test on Gemma-2-2B (base) + Gemma-Scope SAE at
+# layer 20. Goal is plumbing — exercise sae-lens loading, the sae_features
+# stage, and the sae_emd intervene hook end-to-end on real CUDA. Single
+# layer; the multi-layer counterpart is `gemma2_2b_sae_multilayer_smoke.yaml`.
+#
+# alpha_grid:
+#   0.0 — sanity check that encode→decode→err-inject keeps generation sane.
+#   1.0 — actually applies the cohen_d-weighted SAE shift.
+#
+# Requires HF_TOKEN (Gemma-2 license accepted) and OPENROUTER_API_KEY in .env.
+#
+# Run:  scripts/docker/run.sh <gpu_idx> run --config configs/experiment/gemma2_2b_sae_smoke.yaml
+
+extends: ../base.yaml
+
+model: ../model/gemma2_2b_base.yaml
+judge: ../judge/openrouter_qwen35_flash.yaml
+nli: ../nli/deberta_v3_base.yaml
+
+dataset:
+  name: nq_open
+  split: validation
+  n_samples: 10
+  seed: 0
+
+sae:
+  provider: sae_lens
+  release: gemma-scope-2b-pt-res-canonical
+  sae_id: layer_20/width_16k/canonical
+
+stages:
+  generate:
+    n_samples: 4
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 40
+  vuf:
+    layers: [20]
+    # top_n on n=10: vu_threshold default would mostly trigger the empty-split
+    # fallback. Explicit top_n keeps the smoke deterministic.
+    selection: top_n
+    n_top: 4
+    n_bot: 4
+    pooling: last_token_q
+  sae_features:
+    k_top: 8
+    selection_mode: topk
+  intervene:
+    method: sae_emd
+    mode: fixed
+    alpha_grid: [0.0, 1.0]
+    layer: 20
+    sae_emd_delta: cohen_d
+
+seed: 42

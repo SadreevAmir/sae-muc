@@ -1,0 +1,5 @@
+# Cheap Qwen via the CherryIn New-API proxy. Use when OpenRouter is
+# unavailable. CHERRYIN_API_KEY in .env.
+provider: cherryin
+model: qwen/qwen3.5-flash
+max_retries: 3

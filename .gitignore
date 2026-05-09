@@ -1,28 +1,42 @@
+# OS
+.DS_Store
+
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs / env files
 .venv/
-.DS_Store
+venv/
+.env
+
+# Jupyter
 .ipynb_checkpoints/
 
-# Large model/data artifacts — download separately, not tracked in git
+# Pipeline artifacts (big, live on server) — anchored to repo root only,
+# so that `src/sae_muc/data/` (the dataset loaders package) stays tracked.
+/data/
 *.pt
 *.pkl
 *.npy
 *.pickle
 *.h5
+*.safetensors
 
-sae_muc/artifacts/*
-!sae_muc/artifacts/.gitkeep
+# Reference materials kept local only
+Calibrating_Verbal_Uncertainty_as_a_Linear_Feature_to_Reduce_Hallucinations.pdf
+project_report (1)/
 
-# Data directories (too large for git)
-datasets__nq_open/
-nq_open/
-verbal_uncertainty__outputs/
-calibration__outputs/
+# Per-developer instructions for Claude Code (kept local)
+CLAUDE.md
 
-# Environment / secrets
-.env
-
-# metrics_finder data (only notebooks tracked)
-metrics_finder/**
-!metrics_finder/*.ipynb
+# Internal session artefacts (review notes, executor reports, scratch
+# write-ups). Anchored to repo root so the name doesn't collide with a
+# nested `docs/` package elsewhere.
+/docs/

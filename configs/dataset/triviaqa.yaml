@@ -1,0 +1,5 @@
+# TriviaQA (mandarjoshi/trivia_qa, config="rc"). Paper uses 1k validation.
+name: triviaqa
+split: validation
+n_samples: 500
+seed: 42

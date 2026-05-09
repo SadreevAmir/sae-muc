@@ -1,0 +1,4 @@
+# Paper default generator (Llama family). Gated — `huggingface-cli login` required.
+provider: hf_local
+name: meta-llama/Llama-3.1-8B-Instruct
+dtype: bfloat16

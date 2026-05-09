@@ -1,0 +1,7 @@
+# Gemma-2-2B base (NOT instruct). Used with Gemma-Scope SAEs which were
+# trained on activations of this exact base model. Gated under the Gemma
+# license; access requires HF_TOKEN with the license accepted at
+# https://huggingface.co/google/gemma-2-2b.
+provider: hf_local
+name: google/gemma-2-2b
+dtype: bfloat16

@@ -1,0 +1,5 @@
+# FakeBackend — returns deterministic decimals on judge-shaped prompts and
+# yes/no on accuracy-shaped prompts. No network.
+provider: fake
+model: fake-judge
+max_retries: 1
