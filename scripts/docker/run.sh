@@ -69,9 +69,24 @@ if [[ -n "${RUNS_HOST}" ]]; then
     RUNS_MOUNT=(-v "${RUNS_HOST}:/app/data/runs")
 fi
 
+# Supplementary group for shared-storage write access. The shared dir's
+# group bit (drwxrws---) requires membership; --user only forwards the
+# primary group, so without --group-add a non-owner teammate gets
+# PermissionError on the very first mkdir under data/runs/. Resolve the
+# GID of $SAE_MUC_GROUP (default ipadocker) from /etc/group; works even
+# if the group doesn't exist inside the container — Docker only needs
+# the numeric GID. Skip if the host doesn't have the group at all
+# (private dev box etc).
+GROUP_NAME="${SAE_MUC_GROUP:-ipadocker}"
+GROUP_ADD_ARG=()
+if SHARED_GID="$(getent group "${GROUP_NAME}" | cut -d: -f3)" && [[ -n "${SHARED_GID}" ]]; then
+    GROUP_ADD_ARG=(--group-add "${SHARED_GID}")
+fi
+
 exec docker run --rm "${TTY_ARG[@]}" \
     --gpus "\"device=${GPU_ID}\"" \
     --user "$(id -u):$(id -g)" \
+    "${GROUP_ADD_ARG[@]}" \
     --shm-size=2g \
     -v "${REPO_DIR}:/app" \
     -v "${HF_CACHE}:/home/appuser/.cache/huggingface" \

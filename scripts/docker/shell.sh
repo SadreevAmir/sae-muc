@@ -42,10 +42,19 @@ if [[ -n "${RUNS_HOST}" ]]; then
     RUNS_MOUNT=(-v "${RUNS_HOST}:/app/data/runs")
 fi
 
+# Same supplementary-group fix as run.sh — a teammate who isn't owner of
+# the shared dirs needs ipadocker GID inside the container to write.
+GROUP_NAME="${SAE_MUC_GROUP:-ipadocker}"
+GROUP_ADD_ARG=()
+if SHARED_GID="$(getent group "${GROUP_NAME}" | cut -d: -f3)" && [[ -n "${SHARED_GID}" ]]; then
+    GROUP_ADD_ARG=(--group-add "${SHARED_GID}")
+fi
+
 # `with-umask bash` sets umask 002 then execs interactive bash.
 exec docker run --rm -it \
     --gpus "\"device=${GPU_ID}\"" \
     --user "$(id -u):$(id -g)" \
+    "${GROUP_ADD_ARG[@]}" \
     --shm-size=2g \
     -v "${REPO_DIR}:/app" \
     -v "${HF_CACHE}:/home/appuser/.cache/huggingface" \
