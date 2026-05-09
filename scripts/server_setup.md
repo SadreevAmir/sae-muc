@@ -26,7 +26,6 @@ ask the admin — do not `sudo docker`.
 ```bash
 git clone https://github.com/SadreevAmir/sae-muc.git ~/sae-muc
 cd ~/sae-muc
-git checkout feature/server-pipeline
 ```
 
 No `uv sync` on the host — uv lives inside the image.

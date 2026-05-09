@@ -21,7 +21,6 @@ Two environments, separate paths:
 
 ```bash
 git clone https://github.com/SadreevAmir/sae-muc.git && cd sae-muc
-git checkout feature/server-pipeline
 uv sync --all-extras          # runtime + dev deps
 cp .env.example .env           # tokens NOT needed for local tests
 uv run pytest -q               # ~200 unit + integration tests on fakes (~20s)
@@ -58,7 +57,6 @@ TL;DR — first time on the box:
 ```bash
 ssh user@caniculus
 git clone https://github.com/SadreevAmir/sae-muc.git ~/sae-muc && cd ~/sae-muc
-git checkout feature/server-pipeline
 cp .env.example .env && $EDITOR .env     # HF_TOKEN, OPENROUTER_API_KEY
                                           # (do NOT run huggingface-cli login —
                                           #  it would write the token to shared cache)

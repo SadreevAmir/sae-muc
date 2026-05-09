@@ -5,9 +5,10 @@ autoencoder (SAE)-based interventions. Reproduces and extends
 *Calibrating Verbal Uncertainty as a Linear Feature to Reduce Hallucinations*
 (Ji et al., Meta FAIR, 2025 — [arXiv:2503.14477](https://arxiv.org/abs/2503.14477)).
 
-**Status.** Migrating from a Colab-era prototype (see
-[`archive/old-prototype/`](archive/old-prototype/)) into a reproducible
-server-based pipeline. Work in progress on `feature/server-pipeline`.
+**Status.** Migrated from a Colab-era prototype (see
+[`archive/old-prototype/`](archive/old-prototype/)) to a reproducible
+server-based pipeline. Pipeline is end-to-end on real models + SAEs;
+research follow-ups tracked in [TODO.md](TODO.md).
 
 ## Layout
 
