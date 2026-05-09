@@ -6,8 +6,19 @@
 # files inherit the group and team members can read/write each other's
 # artefacts.
 #
-# Run this once from any teammate's account; subsequent re-runs are
+# Run this from any teammate's account; subsequent re-runs are
 # idempotent. Verify with `ls -ld /mnt/ssd/sae-muc/*`.
+#
+# Permission semantics: chgrp and chmod can only be done by the file's
+# owner (or root). On a re-run by user B, files created by user A in a
+# previous run can't be modified by B. We handle this by:
+#   1. Only attempting chgrp/chmod on entries that are actually drifted
+#      (find ! -group / ! -perm) — no-op for already-correct files.
+#   2. Tolerating failures (2>/dev/null || true) because chgrp on files
+#      owned by another teammate is expected and harmless if those files
+#      were already set correctly by the original owner's run.
+#   3. Reporting any uncorrectable drift at the end so the team knows
+#      to ask the original owner to re-run.
 #
 # Caveat: ipadocker has ~300 members on caniculus — this group is
 # functionally "everyone with server access", not a team-private group.
@@ -31,19 +42,40 @@ fi
 
 mkdir -p "${ROOT}/hf-cache" "${ROOT}/uv-cache" "${ROOT}/runs"
 
-# setgid (2) + group rwx (7) + world rx (5) → new files inherit group ipadocker
-chgrp -R "${GROUP}" "${ROOT}"
-chmod 2775 "${ROOT}" "${ROOT}/hf-cache" "${ROOT}/uv-cache" "${ROOT}/runs"
+# Fix group on entries not already in $GROUP. Suppress permission errors:
+# chgrp on another teammate's files is expected and harmless (the file is
+# already in $GROUP from the original owner's run).
+find "${ROOT}" ! -group "${GROUP}" -exec chgrp "${GROUP}" {} + 2>/dev/null || true
 
-# Repair drift: if the tree was already populated (e.g., a teammate ran
-# under default umask 022), older subdirs/files may not be group-writable
-# and won't carry setgid. Re-asserting fixes it idempotently.
-find "${ROOT}" -type d -exec chmod g+ws {} +
-find "${ROOT}" -type f -exec chmod g+w {} +
+# setgid on directories that lack it (g+s on dirs makes new entries
+# inherit the parent's group, the whole point of this script).
+find "${ROOT}" -type d ! -perm -2000 -exec chmod g+s {} + 2>/dev/null || true
+
+# Group write on entries that lack it.
+find "${ROOT}" ! -perm -g+w -exec chmod g+w {} + 2>/dev/null || true
+
+# Top-level: try to assert 2775 on the root and the four cache dirs.
+# Silently no-op if we don't own them — they'll stay at whatever the
+# original creator made them, which on a healthy tree is already 2775.
+chmod 2775 "${ROOT}" "${ROOT}/hf-cache" "${ROOT}/uv-cache" "${ROOT}/runs" 2>/dev/null || true
 
 echo "ready: ${ROOT}"
 echo
 ls -ld "${ROOT}" "${ROOT}"/*
 echo
+
+# Report drift we couldn't repair so the team knows what to chase down.
+bad_group=$(find "${ROOT}" ! -group "${GROUP}" 2>/dev/null | wc -l)
+bad_dir_setgid=$(find "${ROOT}" -type d ! -perm -2000 2>/dev/null | wc -l)
+bad_gw=$(find "${ROOT}" ! -perm -g+w 2>/dev/null | wc -l)
+if (( bad_group + bad_dir_setgid + bad_gw > 0 )); then
+    echo "warning: drift remains (likely files owned by other teammates):"
+    echo "  ${bad_group} entries not in group ${GROUP}"
+    echo "  ${bad_dir_setgid} directories without setgid"
+    echo "  ${bad_gw} entries without g+w"
+    echo "  ask the original owner(s) to re-run scripts/docker/setup_shared.sh"
+    echo
+fi
+
 echo "next: scripts/docker/run.sh <gpu_id> run --config <yaml>"
 echo "      (SAE_MUC_SHARED defaults to ${ROOT})"
