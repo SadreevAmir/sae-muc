@@ -241,23 +241,29 @@ See [`gemma2_2b_sae_multilayer_smoke.yaml`](experiment/gemma2_2b_sae_multilayer_
 ### Recipe 4: sparse-coverage release via overrides (Mistral)
 
 `mistral-7b-res-wg` ships only layers 8/16/24 with non-templatable
-sae_ids. Use explicit overrides and **manually intersect** the layer
-list:
+sae_ids (`blocks.N.hook_resid_pre`). Use explicit overrides and an
+explicit layer list:
 
 ```yaml
 sae:
   provider: sae_lens
   release: mistral-7b-res-wg
   sae_id_overrides:
+    8:  "blocks.8.hook_resid_pre"
     16: "blocks.16.hook_resid_pre"
     24: "blocks.24.hook_resid_pre"
 
 stages:
-  vuf: {layers: [16, 24]}
+  vuf: {layers: [8, 16, 24]}
   intervene:
     method: sae_emd
-    layer: [16, 24]                              # paper_range 15-31 ∩ {8,16,24}
+    mode: adaptive
+    alpha_max: 0.4                              # paper App G.1 for Mistral-7B
+    layer: [8, 16, 24]
 ```
+
+See [`mistral7b_sae_sparse_smoke.yaml`](experiment/mistral7b_sae_sparse_smoke.yaml)
+for the full paper-shape (n=50, adaptive MUC, combined detector).
 
 Don't pass `intervene.layer: paper_range` here — the resolver will fail
 loud on the layers without an override (15, 17, 18, …), which is the
@@ -340,3 +346,16 @@ seed: 42
 - **Server runs are Docker-only**. Even with the right config,
   `uv run sae-muc run` on the host is forbidden — see
   [`scripts/server_setup.md`](../scripts/server_setup.md).
+- **Base models hedge ~everything**. `gemma-2-2b` (base) on the paper's
+  completion-style prompt produces "I'm not sure" / continues a fake
+  FAQ for ≥90% of NQ-Open questions, and the refusal filter eats them →
+  `n_refusal=9/10`, the detector can't fit, metrics are noise. For
+  meaningful Tab.3-style numbers use the `-it` variants (`gemma-2-2b-it`,
+  `Mistral-7B-Instruct-v0.3`, `Llama-3.1-8B-Instruct`). Caveat: SAEs
+  trained on the base model (Gemma-Scope, Llama-Scope) used on `-it`
+  are slightly OOD; the reconstruction degrades but still works in
+  practice.
+- **n=10 is for plumbing, not statistics**. Detector AUROC is
+  computed on the 80/20 split of the trainable subset; with refusals
+  excluded, n=10 leaves ≤2 test samples → CI ≈ ±50%. Use n≥50 for any
+  comparison you'd quote.

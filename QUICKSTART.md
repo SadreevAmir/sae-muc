@@ -1,86 +1,130 @@
 # Quickstart
 
+Two environments, separate paths:
+
+- **Local** = editor + unit / integration tests on fake backends. No GPU,
+  no real LLM weights, no API keys.
+- **Server** = real GPU runs. **Docker-only** (no system Python, no host
+  venv); see [`scripts/server_setup.md`](scripts/server_setup.md) for the
+  detailed walkthrough.
+
 ## Prerequisites
 
-- **Everywhere:** Python 3.11+, git, access to this GitHub repo, [uv](https://docs.astral.sh/uv/)
+- **Local:** Python 3.11+ (3.12 preferred to match the image), git, [uv](https://docs.astral.sh/uv/)
   (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
-- **Server only:** NVIDIA GPU + CUDA 12+, HuggingFace account (for gated
-  models like Mistral-7B-Instruct), OpenRouter API key.
-- **Recommended on server:** `tmux` or `screen` so long runs survive SSH
-  disconnects.
+- **Server:** Docker with `nvidia-container-toolkit`, member of the
+  `docker` and (on caniculus) `ipadocker` group, NVIDIA GPU with CUDA
+  12.2+ driver. HF account with licenses accepted for any gated models
+  you want (Gemma-2, Llama-3, Mistral). OpenRouter API key for the judge.
 
-## Local setup (development)
-
-Local machine = editor + tests on fake backends. No GPU, no real LLM locally.
+## Local setup (editing + tests)
 
 ```bash
-git clone <repo-url> sae-muc && cd sae-muc
+git clone https://github.com/SadreevAmir/sae-muc.git && cd sae-muc
 git checkout feature/server-pipeline
 uv sync --all-extras          # runtime + dev deps
-cp .env.example .env           # tokens are only needed on the server
-uv run pytest -q               # unit + integration tests on fakes
+cp .env.example .env           # tokens NOT needed for local tests
+uv run pytest -q               # ~200 unit + integration tests on fakes (~20s)
 ```
 
-Run the pipeline on mocked models (no GPU, no network):
+Validate a real-shape config without touching the network or GPU:
 
 ```bash
-uv run sae-muc --help          # stub today; real stages land as they are built
+uv run python -c "
+from sae_muc.config import load_experiment_config
+cfg = load_experiment_config('configs/experiment/gemma2_2b_sae_smoke.yaml')
+print(cfg.model.name, cfg.stages.intervene.method)
+"
 ```
 
-## Server setup (real runs)
-
-Full walkthrough with GPU / CUDA / tmux specifics lives at
-[`scripts/server_setup.md`](scripts/server_setup.md). TL;DR:
+For an SAE-availability check against the live sae-lens registry (still
+no GPU needed):
 
 ```bash
-ssh user@server
+uv run python -c "
+from sae_muc.config import load_experiment_config
+from sae_muc.models.sae import assert_sae_layers_available
+cfg = load_experiment_config('configs/experiment/mistral7b_sae_sparse_smoke.yaml')
+assert_sae_layers_available(cfg.sae, [8, 16, 24])
+print('OK')
+"
+```
+
+## Server runs (real GPU)
+
+Full walkthrough at [`scripts/server_setup.md`](scripts/server_setup.md).
+TL;DR — first time on the box:
+
+```bash
+ssh user@caniculus
 git clone https://github.com/SadreevAmir/sae-muc.git ~/sae-muc && cd ~/sae-muc
 git checkout feature/server-pipeline
-uv sync --all-extras
-cp .env.example .env && $EDITOR .env     # fill HF_TOKEN + OPENROUTER_API_KEY
-uv run huggingface-cli login             # for gated models (Mistral, Llama)
-
-tmux new -s run
-uv run sae-muc run --config configs/experiment/qwen05b_smoke.yaml
-# detach: Ctrl-b d         reattach: tmux attach -t run
+cp .env.example .env && $EDITOR .env     # HF_TOKEN, OPENROUTER_API_KEY
+                                          # (do NOT run huggingface-cli login —
+                                          #  it would write the token to shared cache)
+scripts/docker/setup_shared.sh           # one-time, idempotent
+scripts/docker/build.sh                  # ~5 min first time, per-user image tag
 ```
 
-## Launch a server run from your laptop
+Then for every run:
 
 ```bash
-export SAE_MUC_SSH_HOST=user@server
-./scripts/remote_run.sh configs/experiment/qwen25_7b_triviaqa.yaml
+nvidia-smi --query-gpu=index,name,memory.used,utilization.gpu --format=csv,noheader
+                                          # pick a free L40 / L40S
+tmux new -s smoke
+scripts/docker/run.sh <gpu> run --config configs/experiment/gemma2_2b_sae_smoke.yaml
+                                          # detach: Ctrl-b d
+                                          # reattach: tmux attach -t smoke
 ```
 
-The helper ssh's in, pulls the branch, `uv sync`s, and starts the run in
-a fresh `tmux` session whose name it prints. Attach later with
-`ssh $SAE_MUC_SSH_HOST tmux attach -t <session>`.
-
-## Pull artefacts back
+The pipeline writes its full log to `/mnt/ssd/sae-muc/runs/<run_id>/run.log`
+**alongside the artefacts**. From any other ssh session:
 
 ```bash
-export SAE_MUC_SSH=user@server:/home/you/sae-muc
-./scripts/sync_artifacts.sh <run_id>            # parquet / json only
-./scripts/sync_artifacts.sh --heavy <run_id>    # also safetensors (bigger)
+tail -f /mnt/ssd/sae-muc/runs/<run_id>/run.log
 ```
+
+Resume a partially-completed run (your own or a teammate's):
+
+```bash
+scripts/docker/run.sh <gpu> run --config <yaml> --run-id <existing_run_id>
+# stages with valid manifests are skipped; only what's missing runs
+```
+
+## Pull artefacts back to your laptop
+
+```bash
+export SAE_MUC_RUNS_REMOTE=user@caniculus:/mnt/ssd/sae-muc/runs
+./scripts/sync_artifacts.sh <run_id>            # parquet + json + run.log (small)
+./scripts/sync_artifacts.sh --heavy <run_id>    # also safetensors (GBs)
+```
+
+(The legacy `SAE_MUC_SSH=user@server:/path/to/sae-muc` env still works
+and points at `<repo>/data/runs/`; use it only for ranов that landed in
+per-user storage rather than shared.)
 
 ## Common operations
 
-- **Switch config** — change `--config` argument; each config resolves into
-  one `data/runs/<run_id>/`. Schema reference, composition rules
-  (`extends:`, fragment refs), and ready-to-edit recipes live in
-  [`configs/README.md`](configs/README.md).
-- **Read a parquet artefact:**
+- **Switch experiment** — change `--config <yaml>`. Each config + seed
+  combination resolves to its own `<run_id>`. Schema reference and
+  cookbook recipes live in [`configs/README.md`](configs/README.md).
+- **Read a parquet artefact** (locally, after sync, or directly on the
+  server through `scripts/docker/shell.sh`):
   ```python
   import pandas as pd
   pd.read_parquet("data/runs/<run_id>/generations.parquet")
   ```
-- **Compare before/after intervention:**
-  ```python
-  pd.read_parquet("data/runs/<run_id>/metrics_comparison.parquet")
-  ```
+- **Compare before/after intervention** — every run produces
+  `metrics_comparison.parquet` with one row per intervention variant.
+- **Read a teammate's run** — same path under `/mnt/ssd/sae-muc/runs/`,
+  group `ipadocker` makes it readable. Run-id prefix shows the owner.
 
 ## Secrets
 
-All secrets live in `.env` on the server. `.env` is gitignored; the template
-is `.env.example`. Never commit tokens.
+`.env` lives per-user inside the repo, gitignored, **never in shared
+storage**. The Docker image excludes `.env` from the build context too,
+so it's never baked in — it's mounted at runtime via `--env-file`.
+
+Never run `huggingface-cli login` inside the container; it would write
+the token to `~/.cache/huggingface/token` which on caniculus resolves to
+the shared cache directory, readable by ~50 people.

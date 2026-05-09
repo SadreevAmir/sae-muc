@@ -64,6 +64,13 @@ Group `ipadocker` + setgid bit + container-side `umask 002` mean files
 written by any teammate are group-writable, so anyone can resume or
 extend a teammate's run via `--run-id <foreign>`.
 
+`scripts/docker/run.sh` and `shell.sh` automatically pass
+`--group-add ipadocker` to docker run, so the container's process gets
+the group as a supplementary GID and can write through the group bit
+even when the parent dir is owned by another teammate. Without this,
+`mkdir` in `data/runs/` fails with PermissionError on the very first
+non-owner run.
+
 **Caveat.** `ipadocker` has ~50 effective members on caniculus (verified
 2026-05-07: 49 of 54 active /home users). The alternative `docker(999)`
 is the same size (~52), so neither group offers real isolation — anyone
@@ -133,32 +140,41 @@ tests fit on an L40 (idx 1, 4, 5) or L40S (idx 3, 6).
 Under `tmux` so the run survives an SSH drop:
 
 ```bash
-tmux new -s sae-muc
+tmux new -s sae-smoke
 
 # inside tmux:
 cd ~/sae-muc
-scripts/docker/run.sh 4 run --config configs/experiment/qwen05b_smoke.yaml
+scripts/docker/run.sh 4 run --config configs/experiment/gemma2_2b_sae_smoke.yaml
 ```
 
-Detach with `Ctrl-b d`, reattach with `tmux attach -t sae-muc`.
+Detach with `Ctrl-b d`, reattach with `tmux attach -t sae-smoke`.
 
-Expected on a free L40:
-- Generate (Qwen2.5-0.5B) loads weights once, then < 1 s / question.
-- Judge + accuracy_judge via OpenRouter: ~1 s each.
-- NLI (DeBERTa-v3-base): loads once (~180 MB), then fast.
-- Full pipeline on 10 questions: **2–4 minutes**.
+Expected on a free L40 with weights already in shared cache:
+- Generate (Gemma-2-2B): ~15 s for 10 questions × 5 generations.
+- Judge + accuracy_judge via OpenRouter: ~30 s + ~5 s.
+- NLI (DeBERTa-v3-base): loads once, then ~3 s.
+- sae_features (Gemma-Scope SAE layer 20): ~5 s.
+- intervene (sae_emd, 2 alphas): ~7 s.
+- judge_post (re-scoring 2 variants): ~60 s.
+- Full pipeline on 10 questions: **~3–5 minutes**.
 
-Model weights are cached at `~/.cache/huggingface/` on the host (mounted
-into the container), so subsequent runs skip the download.
+Cold first run on a teammate's account that hasn't touched these models
+yet: add ~3 min to download Gemma-2-2B (~5 GB) and ~5 s for the SAE.
+Subsequent runs reuse the shared cache.
 
-## 8. Paper-scale run
+## 8. Paper-shape run (n=50, adaptive MUC)
 
-Same shape, bigger config and a beefier GPU:
+Same shape, bigger config:
 
 ```bash
 tmux new -s paper-run
-scripts/docker/run.sh 0 run --config configs/experiment/qwen25_7b_triviaqa.yaml
+scripts/docker/run.sh 4 run --config configs/experiment/mistral7b_sae_sparse_smoke.yaml
 ```
+
+Mistral-7B-Instruct + sparse Gemma-Scope-style SAE on layers 8/16/24,
+adaptive MUC (paper §4.2 Eq.5–6), n=50. Wall time on a free L40:
+**~25 minutes**, dominated by `intervene` (~11 min) and `judge_post`
+(~5 min, OpenRouter latency).
 
 ## 9. Interactive debugging
 
@@ -173,15 +189,42 @@ pytest -q
 `appuser`'s HOME is `/home/appuser`, the venv is at `/opt/venv` (already
 on PATH), the repo is bind-mounted at `/app`.
 
-## 10. Pull artefacts back to your laptop
+## 10. Watching logs
+
+The pipeline writes its own log (no ANSI codes, plain text) to the run
+directory **alongside the artefacts**:
+
+```
+/mnt/ssd/sae-muc/runs/<run_id>/run.log
+```
+
+So from any ssh session (yours or a teammate's), without tmux, without
+script(1), and without re-attaching:
+
+```bash
+RUN=$(ls -t /mnt/ssd/sae-muc/runs | head -1)   # most recent run
+tail -f /mnt/ssd/sae-muc/runs/$RUN/run.log
+```
+
+The terminal in tmux still shows the cyan `==> stage` / green `[ok] …`
+banners with timestamps; the file gets the same lines without colour
+codes. Resumes via `--run-id` append to the same file, so the resume
+history is in one place.
+
+## 11. Pull artefacts back to your laptop
 
 From your local machine (not the server):
 
 ```bash
-export SAE_MUC_SSH=user@server:/home/user/sae-muc
-./scripts/sync_artifacts.sh <run_id>           # parquet + json only
-./scripts/sync_artifacts.sh --heavy <run_id>   # also safetensors
+export SAE_MUC_RUNS_REMOTE=user@caniculus:/mnt/ssd/sae-muc/runs
+./scripts/sync_artifacts.sh <run_id>           # parquet + json + run.log
+./scripts/sync_artifacts.sh --heavy <run_id>   # also safetensors (GBs)
 ```
+
+`SAE_MUC_RUNS_REMOTE` points at the runs root in shared storage. The
+legacy `SAE_MUC_SSH=user@server:/abs/repo/path` env still works and
+points at `<repo>/data/runs/`; only useful if you ran with
+`SAE_MUC_SHARED=` (personal storage).
 
 ## Troubleshooting
 
@@ -196,7 +239,15 @@ export SAE_MUC_SSH=user@server:/home/user/sae-muc
   a `*:free` route. See `scripts/check_openrouter.py --balance`.
 - **SSH dropped mid-run** — reattach with `tmux attach`. Stages with
   manifests are skipped on resume; pass `--run-id <existing>` to keep
-  the same artefact directory.
+  the same artefact directory. Or skip tmux entirely and `tail -f` the
+  run.log from a fresh ssh session.
+- **`PermissionError: ... data/runs/<run_id>/`** on a teammate's first
+  run — the supplementary group `ipadocker` wasn't propagated into the
+  container. `git pull` for the latest `scripts/docker/run.sh` (since
+  commit `dc0111c` it passes `--group-add` automatically).
+- **`setup_shared.sh: chgrp: Operation not permitted`** on second-and-later
+  runs — harmless, fixed in commit `6663353`. The script now skips
+  already-correct entries and tolerates files owned by other teammates.
 - **Want to inspect the image build context size** —
   `tar --exclude-from=.dockerignore -cf - . | wc -c` (should be a few MB,
   not GB; if GB, something heavy slipped past `.dockerignore`).

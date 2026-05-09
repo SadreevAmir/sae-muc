@@ -21,13 +21,17 @@ server-based pipeline. Work in progress on `feature/server-pipeline`.
   fake backends, no GPU required.
 - `archive/` — prior-art reference, not on the active development path.
 
-## Pipeline (target shape)
+## Pipeline (current shape)
 
-`prepare → generate → judge (OpenRouter) → semantic_entropy (NLI) →
-hidden_states → vuf → detect → intervene (linear | SAE) → evaluate`.
+`prepare → generate → judge (OpenRouter) → accuracy_judge → semantic_entropy
+(NLI) → hidden_states → vuf → sae_features → detect → intervene
+(linear | SAE) → evaluate → judge_post → accuracy_judge_post →
+semantic_entropy_post → evaluate_post`.
 
-Hidden-state and LLM work runs on the server; judge runs against OpenRouter;
-orchestrator runs on the server. See [QUICKSTART.md](QUICKSTART.md).
+Server runs are Docker-only. Artefacts and per-run logs (`run.log`) land
+under `/mnt/ssd/sae-muc/runs/<run_id>/` on the shared GPU box, readable
+and resumable by any teammate. See [QUICKSTART.md](QUICKSTART.md) and
+[`scripts/server_setup.md`](scripts/server_setup.md).
 
 ## Getting started
 
