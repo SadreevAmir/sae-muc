@@ -54,6 +54,70 @@
 
 ---
 
+## ✅ Per-category VUF: ABSTAIN vs HEDGE disentanglement (done)
+
+Supervisor pointed out that the paper's `uncertain = {VU ≥ 0.9}` bucket
+silently mixes "I don't know" (ABSTAIN) and "I think X" (HEDGE) — both
+have decisiveness ≈ 0, so the linear VUF averages two distinct circuits.
+This is the most likely cause of paper Tab.3's Correctness Rate drop:
+the abstain-half of the direction makes the model refuse correct answers
+alongside the desired Confident Hallucination Rate decrease.
+
+- [x] New stage `categorize_uncertainty` between `hidden_states` and `vuf`.
+      Opt-in via `cfg.stages.categorize.enabled` (default False ⇒
+      byte-identical back-compat). LLM-as-judge with a 4-shot
+      ABSTAIN/HEDGE/CONFIDENT prompt at
+      `data/prompts.py:CATEGORIZE_PROMPT`. Reuses `ctx.judge` — no
+      new backend.
+- [x] Per-generation classification → per-question majority vote
+      (≥60% threshold, else MIXED). CONFIDENT-tagged generations are
+      kept for inspection but excluded from the vote (judge said this
+      gen doesn't actually look uncertain). Vote counts persisted for
+      future re-thresholding.
+- [x] **Certain-bucket questions are NOT categorised** — ~50% saving on
+      judge calls. Labels there are meaningless and would just add noise.
+- [x] `vuf.run` gained `per_category` flag. When on + labels available,
+      builds `r_abstain^(l)` and `r_hedge^(l)` against the **shared**
+      certain pool (cosine isolates abstain-vs-hedge axis from the
+      generic certainty axis). Skips a category with <2 members.
+- [x] Per-category direction metadata in a **separate** parquet
+      `vuf/category_meta.parquet` so existing `vuf/meta.parquet`
+      consumers (`intervene`, `sae_features`, `diagnostics`) see no
+      duplicate layer rows. Main direction filename unchanged →
+      byte-identical checksums when per_category is off.
+- [x] `diagnostics` gained `category_directions.parquet` — per-layer
+      cosines `cosine_abstain_hedge`, `cosine_abstain_main`,
+      `cosine_hedge_main` + pool sizes. The disentanglement question
+      gets a scalar answer per layer.
+- [x] Floating-point fix in `_split_ids_by_threshold`: `groupby.mean()`
+      of identical values can shift by a ULP (mean([0.05, 0.05, 0.05]) ==
+      0.05000000000000001), so user threshold `vu_certain_max=0.05`
+      silently dropped boundary rows. Added 1e-9 epsilon. **Pre-existing
+      bug** caught by category tests — fixed.
+- [x] 20 unit-tests + 244/244 full suite green.
+- [x] Docs: README pipeline-diagram, QUICKSTART "Per-category VUF" with
+      ready-to-paste Python snippet, configs/README entries for
+      `stages.categorize` + `vuf.per_category`.
+
+Deferred extensions (next iteration if cosines show disentanglement):
+- [ ] Per-category intervention in `intervene.run` — `α_abstain·r_abstain
+      + α_hedge·r_hedge` as a single hook. Config shape reserved as
+      `intervene.directions: list[str]` + `intervene.alphas: list[float]`
+      but not implemented. Needed once the cosine analysis confirms
+      directions are separable.
+- [ ] Per-category SAE feature analysis — same `sae_features` machinery
+      but Cohen's d against per-category split. Will reveal whether
+      uncertainty SAE features cluster by behaviour-type.
+- [ ] Additional categories: RANGE (numeric imprecision), CONDITIONAL
+      ("it depends"), UNIVERSAL ("experts disagree"). MVP only needs
+      ABSTAIN vs HEDGE because they're the two dominant types in
+      closed-book short-form QA.
+- [ ] LLM-judge agreement audit: sample ~50 generations, hand-label them,
+      compare with the categorize judge. Calibrate the prompt if
+      precision/recall on either category drops below ~80%.
+
+---
+
 ## ✅ Diagnostics: intervention side-effect on general LM capability (done)
 
 Paper Tab.3 меряет только task-specific damage (Correctness Rate / Refusal

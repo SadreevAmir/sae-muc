@@ -48,6 +48,48 @@ def format_vu_judge_prompt(question: str, answer: str) -> str:
     return VU_JUDGE_PROMPT.format(question=question, answer=answer)
 
 
+# Uncertainty categorisation prompt (project extension, not paper).
+#
+# The paper's decisiveness judge lumps "I don't know" (ABSTAIN) and "I think X"
+# (HEDGE) into the same high-VU bucket because both lower the surface
+# decisiveness score. That mixing is what makes the linear VUF an *average* of
+# two distinct circuits. This prompt asks the judge for a label so we can split
+# the uncertain bucket and build per-category directions for disentanglement
+# analysis. Four-shot, single-token output to keep parsing trivial.
+CATEGORIZE_PROMPT = """You will be given a question and a candidate answer from a language model.
+Classify the answer's uncertainty behaviour as exactly one of:
+
+  ABSTAIN — the answer refuses to commit to a specific answer or claims ignorance ("I don't know", "I'm not aware of any information about this", "I can't answer").
+  HEDGE   — the answer commits to a specific factual claim but qualifies it with uncertainty markers ("I think X", "probably Y", "around 1955", "if I recall correctly, Z").
+  CONFIDENT — the answer asserts a specific claim with no hedging markers.
+
+Output a single word: ABSTAIN, HEDGE, or CONFIDENT.
+
+Question: Who painted the Mona Lisa?
+Answer: I don't know who painted it.
+Category: ABSTAIN
+
+Question: When did WWII end?
+Answer: I think it was in 1945.
+Category: HEDGE
+
+Question: What is the capital of France?
+Answer: The capital of France is Paris.
+Category: CONFIDENT
+
+Question: How tall is Mount Everest?
+Answer: Probably around 8,800 meters.
+Category: HEDGE
+
+Question: {question}
+Answer: {answer}
+Category:"""
+
+
+def format_categorize_prompt(question: str, answer: str) -> str:
+    return CATEGORIZE_PROMPT.format(question=question, answer=answer)
+
+
 # Appendix A.3 — accuracy judge. Asks whether the proposed answer is
 # semantically equivalent to any of the golden references. Reply is yes/no.
 ACCURACY_JUDGE_PROMPT = """We are assessing the quality of answers to the following question: {question}

@@ -10,6 +10,7 @@ from sae_muc.artifacts import StageManifest
 from sae_muc.pipeline import (
     accuracy_judge,
     accuracy_judge_post,
+    categorize_uncertainty,
     detect,
     diagnostics,
     evaluate,
@@ -39,6 +40,10 @@ STAGES: dict[str, StageFn] = {
     "accuracy_judge": accuracy_judge.run,
     "semantic_entropy": semantic_entropy.run,
     "hidden_states": hidden_states.run,
+    # Opt-in (cfg.stages.categorize.enabled). When off, writes a zero-row
+    # stub `categories.parquet` so `vuf.run` can branch on contents and
+    # the manifest stays consistent across re-runs.
+    "categorize_uncertainty": categorize_uncertainty.run,
     "vuf": vuf.run,
     "sae_features": sae_features.run,
     "detect": detect.run,

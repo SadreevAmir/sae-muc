@@ -25,9 +25,17 @@ research follow-ups tracked in [TODO.md](TODO.md).
 ## Pipeline (current shape)
 
 `prepare → generate → judge (OpenRouter) → accuracy_judge → semantic_entropy
-(NLI) → hidden_states → vuf → sae_features → detect → intervene
-(linear | SAE) → evaluate → judge_post → accuracy_judge_post →
-semantic_entropy_post → evaluate_post → diagnostics`.
+(NLI) → hidden_states → categorize_uncertainty → vuf → sae_features →
+detect → intervene (linear | SAE) → evaluate → judge_post →
+accuracy_judge_post → semantic_entropy_post → evaluate_post → diagnostics`.
+
+`categorize_uncertainty` is an opt-in extension that splits the `uncertain`
+bucket (VU ≥ 0.9) into **ABSTAIN** ("I don't know") and **HEDGE** ("I think X")
+via a second LLM-as-judge pass. When enabled together with `vuf.per_category`,
+the `vuf` stage builds two extra directions (`r_abstain^(l)`, `r_hedge^(l)`)
+against the shared certain pool, and `diagnostics` reports per-layer
+cosine similarities — the disentanglement question gets a scalar answer.
+See [QUICKSTART#per-category-vuf](QUICKSTART.md#per-category-vuf).
 
 The final `diagnostics` stage is a sidecar paper extension — measures
 intervention side-effects via:

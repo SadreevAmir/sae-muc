@@ -59,6 +59,7 @@ OUTPUT_PPL = "diagnostics/perplexity.parquet"
 OUTPUT_BENCH = "diagnostics/benchmarks.parquet"
 OUTPUT_KL = "diagnostics/kl.parquet"
 OUTPUT_SWEEP = "diagnostics/method_alpha_sweep.parquet"
+OUTPUT_CATEGORY = "diagnostics/category_directions.parquet"
 OUTPUT_SUMMARY = "diagnostics/summary.json"
 
 _SAE_FEATURE_METHODS = ("sae_emd", "sae_clamp")
@@ -298,6 +299,83 @@ def _expand_kl_row(variant: str, method: str, mode: str, alpha: float, layers: s
     }
 
 
+def _compute_category_cosines(ctx: PipelineContext) -> list[dict] | None:
+    """Per-layer cosines between main / abstain / hedge VUF directions.
+
+    Reads `vuf/category_meta.parquet` (produced by `vuf.run` when
+    `vuf.per_category=True`) and pairs each entry with the corresponding
+    main direction. Returns one row per layer with three cosines, or None
+    when category_meta is empty / missing (per-category was off).
+    """
+    if not ctx.store.exists("vuf/category_meta.parquet"):
+        return None
+    cat_meta = ctx.store.load_parquet("vuf/category_meta.parquet")
+    if cat_meta.empty:
+        return None
+    main_meta = ctx.store.load_parquet("vuf/meta.parquet")
+
+    def _load(path: str):
+        import torch  # local — keep module-level light
+
+        return ctx.store.load_safetensors(path)["direction"]
+
+    def _cos(a, b) -> float:
+        denom = float((a.norm() * b.norm()).item())
+        if denom <= 1e-12:
+            return float("nan")
+        return float((a @ b).item() / denom)
+
+    rows: list[dict] = []
+    layers = sorted(set(int(x) for x in cat_meta["layer"].tolist()))
+    for layer in layers:
+        main_path_rows = main_meta[main_meta["layer"] == layer]
+        if main_path_rows.empty:
+            continue
+        main_path = str(main_path_rows.iloc[0]["path"])
+        cat_rows = cat_meta[cat_meta["layer"] == layer]
+        by_variant = {
+            str(r["variant"]): str(r["path"]) for _, r in cat_rows.iterrows()
+        }
+        # Skip layers where neither category was successfully built.
+        if "abstain" not in by_variant and "hedge" not in by_variant:
+            continue
+
+        r_main = _load(main_path)
+        r_abstain = _load(by_variant["abstain"]) if "abstain" in by_variant else None
+        r_hedge = _load(by_variant["hedge"]) if "hedge" in by_variant else None
+
+        n_abstain = (
+            int(cat_rows[cat_rows["variant"] == "abstain"].iloc[0]["n_uncertain"])
+            if "abstain" in by_variant
+            else 0
+        )
+        n_hedge = (
+            int(cat_rows[cat_rows["variant"] == "hedge"].iloc[0]["n_uncertain"])
+            if "hedge" in by_variant
+            else 0
+        )
+
+        rows.append(
+            {
+                "layer": int(layer),
+                "cosine_abstain_hedge": (
+                    _cos(r_abstain, r_hedge)
+                    if r_abstain is not None and r_hedge is not None
+                    else float("nan")
+                ),
+                "cosine_abstain_main": (
+                    _cos(r_abstain, r_main) if r_abstain is not None else float("nan")
+                ),
+                "cosine_hedge_main": (
+                    _cos(r_hedge, r_main) if r_hedge is not None else float("nan")
+                ),
+                "n_abstain": n_abstain,
+                "n_hedge": n_hedge,
+            }
+        )
+    return rows
+
+
 def _sweep_layers(ctx: PipelineContext) -> list[int]:
     """Layers used by the in-run multi-method sweep.
 
@@ -468,6 +546,13 @@ def run(ctx: PipelineContext) -> list[str]:
     if sweep_rows:
         ctx.store.save_parquet(OUTPUT_SWEEP, pd.DataFrame(sweep_rows))
         outputs.append(OUTPUT_SWEEP)
+
+    # Per-category VUF cosine analysis — disentanglement of ABSTAIN vs HEDGE.
+    # Empty when `vuf.per_category` was off (no category_meta.parquet rows).
+    cat_rows = _compute_category_cosines(ctx)
+    if cat_rows:
+        ctx.store.save_parquet(OUTPUT_CATEGORY, pd.DataFrame(cat_rows))
+        outputs.append(OUTPUT_CATEGORY)
 
     summary = {
         "skipped": False,

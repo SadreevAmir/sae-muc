@@ -90,6 +90,19 @@ The full schema lives in [`config.py`](../src/sae_muc/config.py). Highlights:
   per sample. `last_k_tokens` saves disk on long contexts.
 - `last_k: int = 8` (only when `storage="last_k_tokens"`).
 
+### `stages.categorize` — `CategorizeStage`
+
+Opt-in LLM-as-judge classification of uncertain-bucket generations into
+ABSTAIN vs HEDGE. Reuses `ctx.judge` (same OpenRouter / CherryIn backend
+as the decisiveness judge), new 4-shot prompt at
+[`data/prompts.py:CATEGORIZE_PROMPT`](../src/sae_muc/data/prompts.py).
+See [QUICKSTART#per-category-vuf](../QUICKSTART.md#per-category-vuf).
+
+- `enabled: bool = false` — opt-in. With `false`, the stage writes a
+  zero-row stub `categories.parquet` so the manifest is consistent and
+  `vuf` cleanly skips the per-category branch.
+- `max_retries: int = 3` — passed to the judge backend.
+
 ### `stages.vuf` — `VUFStage`
 - `layers: list[int] | "auto"` — layers to extract a VUF for. `auto` =
   every layer present in `hidden_states/`.
@@ -100,6 +113,13 @@ The full schema lives in [`config.py`](../src/sae_muc/config.py). Highlights:
 - `vu_uncertain_min / vu_certain_max: float` — for `vu_threshold`.
 - `pooling: "last_token_q" | "last_token_a" | "mean_q" | "mean_a"` — how
   to pool the per-token hidden state. Paper default `last_token_q`.
+- `per_category: bool = false` — when both this flag and
+  `categorize.enabled` are on AND `categories.parquet` has labelled
+  question-rows, the stage builds two extra directions in
+  `vuf/direction_abstain_layer_{L}.safetensors` /
+  `vuf/direction_hedge_layer_{L}.safetensors` against the shared certain
+  pool. Metadata lands in `vuf/category_meta.parquet` (separate from the
+  legacy `vuf/meta.parquet` to keep existing consumers byte-compatible).
 
 ### `stages.intervene` — `InterveneStage`
 - `method: "linear_vuf" | "sae_emd" | "sae_clamp" | "sae_projected"` —

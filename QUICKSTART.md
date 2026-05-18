@@ -117,6 +117,54 @@ per-user storage rather than shared.)
 - **Read a teammate's run** — same path under `/mnt/ssd/sae-muc/runs/`,
   group `ipadocker` makes it readable. Run-id prefix shows the owner.
 
+## Per-category VUF
+
+The paper's `uncertain = {VU ≥ 0.9}` bucket actually mixes two distinct
+behaviours: **ABSTAIN** (`"I don't know"`) and **HEDGE** (`"I think X"`).
+Both look identical to the decisiveness judge, so the linear VUF averages
+them into a single direction whose steering effect is ambiguous (paper
+Tab.3 Correctness Rate drops alongside Confident Hallucination Rate —
+partly the abstain-half making the model refuse *correct* answers).
+
+The `categorize_uncertainty` stage runs a second LLM-as-judge pass (same
+backend as `judge`, new 4-shot prompt) that labels every uncertain-bucket
+sample generation as ABSTAIN / HEDGE / CONFIDENT, then majority-votes per
+question. When the `vuf.per_category` flag is also on, the `vuf` stage
+builds two extra directions against the *shared* certain pool:
+
+  - `r_abstain^(l) = mean(h)_{abstain} − mean(h)_{certain}`
+  - `r_hedge^(l)   = mean(h)_{hedge}   − mean(h)_{certain}`
+
+`diagnostics` then writes `diagnostics/category_directions.parquet` with
+per-layer cosines. Low `cosine_abstain_hedge` (<~0.7) ⇒ residual stream
+encodes them separately and per-category steering is viable; high (>~0.9)
+⇒ they share a direction (interesting negative result).
+
+Both flags default off — existing experiment YAMLs produce byte-identical
+artefacts. To opt in:
+
+```yaml
+stages:
+  categorize:
+    enabled: true
+  vuf:
+    per_category: true
+```
+
+Quick read:
+
+```python
+import pandas as pd
+cosines = pd.read_parquet("data/runs/<run_id>/diagnostics/category_directions.parquet")
+# columns: layer, cosine_abstain_hedge, cosine_abstain_main, cosine_hedge_main, n_abstain, n_hedge
+print(cosines)
+```
+
+Categories: API cost roughly doubles judge spending on the uncertain bucket
+only (certain-bucket questions are skipped — labels there are meaningless).
+On a paper-scale TriviaQA run with 1k questions this is ~300-500 extra
+judge calls.
+
 ## Diagnostics artefacts
 
 The `diagnostics` stage measures intervention *side-effects* on general

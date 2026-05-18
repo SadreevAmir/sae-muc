@@ -66,6 +66,21 @@ class HiddenStatesStage(_Frozen):
     last_k: int = 8
 
 
+class CategorizeStage(_Frozen):
+    """LLM-as-judge categorisation of uncertain-bucket generations.
+
+    Splits the `uncertain = {VU ≥ vu_uncertain_min}` set into ABSTAIN
+    ("I don't know") vs HEDGE ("I think X") so the downstream `vuf` stage
+    can build per-category directions and the disentanglement question
+    (paper Tab.3 mixing of refusal + hedging) has a scalar answer.
+
+    Opt-in by design: `enabled=False` (default) keeps every existing run
+    byte-identical. Reuses `ctx.judge` — no second backend.
+    """
+    enabled: bool = False
+    max_retries: int = 3
+
+
 class VUFStage(_Frozen):
     layers: list[int] | Literal["auto"] = "auto"
     # selection chooses how the (uncertain, certain) splits are drawn:
@@ -82,6 +97,12 @@ class VUFStage(_Frozen):
     vu_uncertain_min: float = 0.9
     vu_certain_max: float = 0.05
     pooling: Literal["last_token_q", "last_token_a", "mean_q", "mean_a"] = "last_token_q"
+    # When True AND `categories.parquet` has labelled question-level rows,
+    # `vuf.run` also builds per-category directions (`abstain`, `hedge`)
+    # in addition to the aggregated `main` one — supervisor's
+    # disentanglement experiment. Off by default for byte-identical
+    # back-compat with existing YAMLs.
+    per_category: bool = False
 
 
 class InterveneStage(_Frozen):
@@ -237,6 +258,7 @@ class DiagnosticsStage(_Frozen):
 class StagesConfig(_Frozen):
     generate: GenerateStage = GenerateStage()
     hidden_states: HiddenStatesStage = HiddenStatesStage()
+    categorize: CategorizeStage = CategorizeStage()
     vuf: VUFStage = VUFStage()
     intervene: InterveneStage = InterveneStage()
     detect: DetectStage = DetectStage()
