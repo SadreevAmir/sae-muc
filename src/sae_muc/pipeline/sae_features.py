@@ -140,10 +140,21 @@ def run(ctx: PipelineContext) -> list[str]:
     intervene_cfg = ctx.cfg.stages.intervene
     vuf_cfg = ctx.cfg.stages.vuf
     sae_feat_cfg = ctx.cfg.stages.sae_features
+    diag_cfg = ctx.cfg.stages.diagnostics
 
-    if intervene_cfg.method not in _SAE_METHODS_REQUIRING_FEATURES:
+    # Also run if the diagnostics multi-method sweep needs SAE feature stats
+    # — without that the in-run "method × α" matrix can't score sae_emd /
+    # sae_clamp variants on top of a linear_vuf primary run.
+    diag_needs_sae = bool(diag_cfg.compare_methods) and any(
+        m in _SAE_METHODS_REQUIRING_FEATURES for m in diag_cfg.compare_methods
+    )
+    if (
+        intervene_cfg.method not in _SAE_METHODS_REQUIRING_FEATURES
+        and not diag_needs_sae
+    ):
         log.info(
-            "sae_features: skipped (intervene.method=%s does not consume SAE feature lists)",
+            "sae_features: skipped (intervene.method=%s does not consume SAE "
+            "feature lists, and diagnostics.compare_methods doesn't either)",
             intervene_cfg.method,
         )
         return []

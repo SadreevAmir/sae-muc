@@ -186,6 +186,54 @@ class EvaluateStage(_Frozen):
     su_threshold: float | None = None
 
 
+class DiagnosticsStage(_Frozen):
+    """Intervention side-effect diagnostics: perplexity drift, KL divergence,
+    and accuracy on standard side-effect benchmarks (MMLU / HellaSwag / GSM8K).
+
+    Runs last; sidecar artefacts only, never touches existing ones. Disable
+    on remote-only backends (openrouter has no logits API) or when the host
+    can't afford the dataset downloads.
+
+    Datasets enabled via `corpora`. Each scorer has its own `n_*` cap to
+    keep diagnostic cost bounded — paper-style steering side-effect probes
+    (CAA, ITI, RepE, Arditi 2024) use 200–500 questions per benchmark; full
+    14K MMLU is overkill for a relative damage measurement.
+
+    GSM8K No-CoT mode: short greedy generation + numeric-answer extraction
+    (`gsm8k_max_new_tokens`). Paper-faithful 8-shot CoT is deferred — see
+    TODO.md ("Diagnostics: CoT GSM8K"). The No-CoT NLL is still informative
+    as a function of α even with low absolute accuracy.
+
+    `corpus_n_chars=0` switches WikiText to a built-in synthetic text — used
+    by unit tests so they don't reach the HF datasets cache.
+
+    Multi-method sweep. When `compare_methods` is non-empty the stage also
+    rebuilds hooks for every (method, alpha) pair in
+    `compare_methods × alpha_sweep` from the same VUF directions and SAE
+    feature stats, and writes `diagnostics/method_alpha_sweep.parquet`.
+    This is independent of `intervention/meta.parquet` and meant to produce
+    a clean "method × α × dataset" matrix in one run. Leave empty for the
+    default cross-run workflow (one method per run).
+    """
+    enabled: bool = True
+    # Which benchmarks to score. Order is fixed for output stability.
+    corpora: list[Literal["wikitext", "mmlu", "hellaswag", "gsm8k"]] = Field(
+        default_factory=lambda: ["wikitext", "mmlu", "hellaswag", "gsm8k"]
+    )
+    corpus_n_chars: int = 300_000
+    n_mmlu: int = 200
+    n_hellaswag: int = 200
+    n_gsm8k: int = 200
+    gsm8k_max_new_tokens: int = 32
+    kl_max_prompts: int = 100
+    # Multi-method matrix (in-run sweep). Empty list ⇒ stage runs per-variant
+    # only (reads `intervention/meta.parquet`, original cross-run workflow).
+    compare_methods: list[
+        Literal["linear_vuf", "sae_emd", "sae_clamp", "sae_projected"]
+    ] = Field(default_factory=list)
+    alpha_sweep: list[float] = Field(default_factory=list)
+
+
 class StagesConfig(_Frozen):
     generate: GenerateStage = GenerateStage()
     hidden_states: HiddenStatesStage = HiddenStatesStage()
@@ -194,6 +242,7 @@ class StagesConfig(_Frozen):
     detect: DetectStage = DetectStage()
     sae_features: SAEFeaturesStage = SAEFeaturesStage()
     evaluate: EvaluateStage = EvaluateStage()
+    diagnostics: DiagnosticsStage = DiagnosticsStage()
 
 
 class SAEConfig(_Frozen):

@@ -11,6 +11,7 @@ from sae_muc.pipeline import (
     accuracy_judge,
     accuracy_judge_post,
     detect,
+    diagnostics,
     evaluate,
     evaluate_post,
     generate,
@@ -49,6 +50,9 @@ STAGES: dict[str, StageFn] = {
     "accuracy_judge_post": accuracy_judge_post.run,
     "semantic_entropy_post": semantic_entropy_post.run,
     "evaluate_post": evaluate_post.run,
+    # Sidecar: perplexity / KL drift per intervention variant. Pure additive —
+    # safe to skip via `stages.diagnostics.enabled=false` or by name.
+    "diagnostics": diagnostics.run,
 }
 
 

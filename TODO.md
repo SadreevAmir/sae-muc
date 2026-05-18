@@ -54,6 +54,68 @@
 
 ---
 
+## ✅ Diagnostics: intervention side-effect on general LM capability (done)
+
+Paper Tab.3 меряет только task-specific damage (Correctness Rate / Refusal
+Rate on the same QA dataset). Авторы не меряли perplexity / KL drift — only
+empirical `max_α` tuning per-model (App G.1). Научрук попросила проверить,
+не плывёт ли perplexity от наших интервенций. Стандарт steering-литературы
+(CAA, ITI, RepE, ReFT) — WikiText-2 perplexity + KL divergence.
+
+- [x] Стадия `diagnostics` в конце пайплайна (после `evaluate_post`). Sidecar
+      артефакты под `diagnostics/...`; не трогает существующие. Skippable via
+      `stages.diagnostics.enabled=false` или для backend-ов без logits API
+      (openrouter).
+- [x] `forward_nll_with_hook` + `forward_kl_with_hook` на `HFLocalBackend`:
+      stride-512 NLL с overlap-маской (-100, HF perplexity recipe); KL в
+      float32, softmax/log в fp32 даже под bf16 logits; `padding_side=right`
+      для KL-форварда; KL(p_base || p_int) + top-1 disagreement + top-5
+      mass shift.
+- [x] Пер-вариантная reconstruction хуков: чистая `intervene.build_per_layer_hooks`
+      с явными аргументами; читает variant row из `intervention/meta.parquet`,
+      а не `ctx.cfg.stages.intervene` (которая могла поменяться на re-run).
+- [x] Адаптивные варианты: оцениваются один раз на `mean_alpha` (per-sample
+      diagnostics — N форвардов на вариант — deferred, см. ниже).
+- [x] FakeBackend стабы: probe-pattern (`ones(1,1,D)` через хук), identity
+      hook ⇒ KL == 0 ровно; SAE round-trip ⇒ KL ≈ 0 atol=1e-3.
+- [x] Артефакты: `diagnostics/perplexity.parquet` (one row per variant +
+      baseline), `diagnostics/kl.parquet`, `diagnostics/summary.json`.
+- [x] 16 unit-тестов на FakeBackend; полный test suite зелёный (215/215).
+
+Post-supervisor-feedback extension (done):
+- [x] **MMLU / HellaSwag / GSM8K (No-CoT)** scorer'ы — `pipeline/diagnostics_datasets.py`.
+      MC scoring через NLL argmin (paper-faithful approach из lm-eval-harness);
+      GSM8K brief greedy generation + numeric parsing. Subset 200 questions
+      default (paper-style steering side-effect probes использует 200-500).
+- [x] **Multi-method × α sweep** в одном run — `compare_methods + alpha_sweep`
+      конфиг-флаги. Стадия строит хуки для каждой (method, α) пары из тех же
+      VUF directions / SAE feature stats и пишет
+      `diagnostics/method_alpha_sweep.parquet` long format. Cross-run workflow
+      (один method per run) тоже остался — это default.
+- [x] **`sae_features` un-gating**: запускается также если diagnostics sweep
+      требует SAE-методы (не только если основная intervene.method — SAE).
+- [x] Документация: README pipeline diagram, QUICKSTART new section
+      "Diagnostics artefacts" с готовыми Python-сниппетами для cross-run
+      merge + sweep pivot, configs/README со всеми knobs.
+
+Deferred extensions (отдельной итерацией, по запросу научрука):
+- [ ] **GSM8K с CoT 8-shot** — paper-faithful generation (Arditi 2024 style).
+      Дороже на ~10× (~30-60 min/variant vs ~5 min), но absolute accuracy
+      выше и α-дельта чище. No-CoT NLL уже даёт ppl-vs-α signal, CoT нужен
+      когда захотим публиковать absolute accuracy numbers.
+- [ ] **TruthfulQA + ARC + HumanEval** — Arditi 2024 полный набор. Дальше
+      MMLU/HellaSwag/GSM8K добавляются дёшево (тот же MC scoring шаблон),
+      HumanEval требует sandbox для execution.
+- [ ] Generation health probes на не-QA промптах: refusal-rate / repetition /
+      token-entropy (30-prompt curated set).
+- [ ] Второй корпус (C4 small slice) как cross-check против WikiText
+      memorization (известный риск для моделей, обученных на Common Crawl).
+- [ ] Per-sample адаптивная диагностика — сейчас один forward на `mean_alpha`.
+      Per-sample N forward-проходов даст распределение damage по α-квантилям,
+      нужно если адаптивные runs покажут heavy tails ppl-drift.
+
+---
+
 ## ✅ Paper fidelity (review batch — done)
 
 После критического ревью (см. `REVIEW.md`) закрыты:

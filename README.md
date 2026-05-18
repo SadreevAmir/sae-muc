@@ -27,7 +27,21 @@ research follow-ups tracked in [TODO.md](TODO.md).
 `prepare → generate → judge (OpenRouter) → accuracy_judge → semantic_entropy
 (NLI) → hidden_states → vuf → sae_features → detect → intervene
 (linear | SAE) → evaluate → judge_post → accuracy_judge_post →
-semantic_entropy_post → evaluate_post`.
+semantic_entropy_post → evaluate_post → diagnostics`.
+
+The final `diagnostics` stage is a sidecar paper extension — measures
+intervention side-effects via:
+
+- **Perplexity** drift on WikiText-2 (vanilla LM probe).
+- **Accuracy + NLL** on MMLU / HellaSwag / GSM8K No-CoT (the
+  steering-side-effect benchmark trio used by Arditi 2024, CAA, ITI, RepE).
+- **KL divergence** of next-token distributions on cached QA prompts.
+- Optional **multi-method × α sweep** in a single run (`compare_methods`
+  + `alpha_sweep`) so `linear_vuf` vs SAE-methods comparison doesn't need
+  4 separate runs.
+
+Skip via `stages.diagnostics.enabled=false` or `--stage <other>`. See
+[diagnostics/ artefacts in QUICKSTART](QUICKSTART.md#diagnostics-artefacts).
 
 Server runs are Docker-only. Artefacts and per-run logs (`run.log`) land
 under `/mnt/ssd/sae-muc/runs/<run_id>/` on the shared GPU box, readable

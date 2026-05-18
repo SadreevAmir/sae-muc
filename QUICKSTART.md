@@ -117,6 +117,104 @@ per-user storage rather than shared.)
 - **Read a teammate's run** — same path under `/mnt/ssd/sae-muc/runs/`,
   group `ipadocker` makes it readable. Run-id prefix shows the owner.
 
+## Diagnostics artefacts
+
+The `diagnostics` stage measures intervention *side-effects* on general
+LM capability. The paper's Tab.3 only sees QA-specific damage; this
+stage adds the standard steering-literature probes (Arditi 2024, CAA,
+ITI, RepE):
+
+- **Perplexity** on WikiText-2-raw-v1 (vanilla LM).
+- **MMLU** (4-way MC) — knowledge.
+- **HellaSwag** (4-way completion) — common-sense.
+- **GSM8K** (No-CoT, brief greedy gen + numeric parse) — reasoning.
+- **KL divergence** of next-token distributions on cached QA prompts.
+
+Always runs on `--stage all` (toggle via `stages.diagnostics.enabled=false`).
+OpenRouter backends short-circuit with a stub — they have no logits API.
+
+```
+diagnostics/perplexity.parquet         # variant, mean_ppl, ppl_ratio_vs_baseline, n_tokens
+diagnostics/benchmarks.parquet         # variant, {mmlu,hellaswag,gsm8k}_{accuracy,mean_nll,n}
+diagnostics/kl.parquet                 # variant, mean_kl_*, top1_disagreement_rate, top5_mass_delta
+diagnostics/method_alpha_sweep.parquet # ONLY when compare_methods+alpha_sweep are set
+diagnostics/summary.json               # flat one-row-per-variant rollup
+```
+
+### Per-variant view (default — cross-run workflow)
+
+Each row in `intervention/meta.parquet` gets one row in each artefact above.
+You can compare methods across runs by syncing several `<run_id>`s and
+concatenating their `diagnostics/*.parquet` outside the pipeline.
+
+```python
+import pandas as pd
+ppl   = pd.read_parquet("data/runs/<run_id>/diagnostics/perplexity.parquet")
+bench = pd.read_parquet("data/runs/<run_id>/diagnostics/benchmarks.parquet")
+kl    = pd.read_parquet("data/runs/<run_id>/diagnostics/kl.parquet")
+metrics = pd.read_parquet("data/runs/<run_id>/metrics_comparison.parquet")
+# Trade-off: paper Tab.3 win (lower Confident-Hall.-Rate) vs. capability damage.
+trade = (
+    metrics[["variant", "confident_hallucination_rate"]]
+    .merge(ppl[["variant", "ppl_ratio_vs_baseline"]], on="variant")
+    .merge(bench[["variant", "mmlu_accuracy", "gsm8k_accuracy"]], on="variant")
+    .merge(kl[["variant", "mean_kl_last_prompt_token"]], on="variant")
+)
+print(trade)
+```
+
+### Multi-method × α sweep (single-run matrix)
+
+When you want a "linear_vuf vs sae_emd vs sae_clamp vs sae_projected"
+graph without spinning up 4 separate runs, populate both knobs:
+
+```yaml
+stages:
+  diagnostics:
+    compare_methods: [linear_vuf, sae_emd, sae_clamp, sae_projected]
+    alpha_sweep:     [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]
+```
+
+The stage rebuilds hooks for every (method, α) pair from the same VUF
+directions + SAE feature stats and writes a long-format
+`diagnostics/method_alpha_sweep.parquet`:
+
+```python
+import pandas as pd
+sweep = pd.read_parquet("data/runs/<run_id>/diagnostics/method_alpha_sweep.parquet")
+# columns: method, alpha, dataset, accuracy, mean_nll, layers
+# Plot: e.g. accuracy vs alpha, line per method, facet per dataset.
+print(sweep.pivot_table(index=["method","alpha"], columns="dataset", values="accuracy"))
+```
+
+Note: SAE methods (`sae_emd`, `sae_clamp`) need `sae_features/stats.parquet`,
+which only ran historically when `intervene.method` was a SAE method.
+Including any SAE entry in `compare_methods` auto-un-gates `sae_features`
+on the next `--stage all`.
+
+### Resume a finished run with new diagnostics
+
+```bash
+scripts/docker/run.sh <gpu> run --config <yaml> --run-id <existing_run_id> --stage diagnostics
+```
+
+### Full knob reference
+
+```yaml
+stages:
+  diagnostics:
+    enabled: true                          # set false to skip entirely
+    corpora: [wikitext, mmlu, hellaswag, gsm8k]
+    corpus_n_chars: 300_000                # WikiText cap; 0 = synthetic test corpus
+    n_mmlu: 200                            # subset size per benchmark
+    n_hellaswag: 200
+    n_gsm8k: 200
+    gsm8k_max_new_tokens: 32               # No-CoT brief generation
+    kl_max_prompts: 100
+    compare_methods: []                    # [] = per-variant only; non-empty enables the sweep
+    alpha_sweep: []
+```
+
 ## Secrets
 
 `.env` lives per-user inside the repo, gitignored, **never in shared

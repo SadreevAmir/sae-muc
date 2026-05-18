@@ -291,29 +291,64 @@ def _skip_decode_step(hook_fn):
     return wrapped
 
 
+def build_per_layer_hooks(
+    *,
+    method: str,
+    sae_emd_delta: str,
+    apply_during_generation: bool,
+    layers: list[int],
+    directions: dict[int, "torch.Tensor"],
+    alpha: float,
+    saes: dict[int, "object"],
+    layer_stats: dict[int, dict] | None = None,
+) -> dict[int, callable]:
+    """Build a `{layer: hook_fn}` mapping with explicit args (no ctx).
+
+    Pure-args sibling of `_build_per_layer_hooks`. Stages other than
+    `intervene` (e.g. `diagnostics`) call this directly with the variant
+    parameters parsed from `intervention/meta.parquet` — calling the
+    ctx-wrapper would silently reuse the current config's `method` and
+    `sae_emd_delta`, not the variant's.
+
+    `layer_stats` is required for SAE methods (`sae_emd`, `sae_clamp`) and
+    ignored otherwise. Each entry has the same shape produced by
+    `_load_sae_feature_stats`: keys `uncertainty_idx`, `certainty_idx`,
+    `cohen_d`, `mean_uncertain`.
+    """
+    hooks: dict[int, callable] = {}
+    for layer in layers:
+        stats = layer_stats.get(layer) if layer_stats is not None else None
+        hook_fn = _build_hook_dispatch(
+            method, directions[layer], alpha, saes[layer],
+            layer_stats=stats,
+            sae_emd_delta=sae_emd_delta,
+        )
+        if not apply_during_generation:
+            hook_fn = _skip_decode_step(hook_fn)
+        hooks[layer] = hook_fn
+    return hooks
+
+
 def _build_per_layer_hooks(
     ctx: PipelineContext,
     layers: list[int],
     directions: dict[int, "torch.Tensor"],
     alpha: float,
 ) -> dict[int, callable]:
-    """Build a `{layer: hook_fn}` mapping for the configured intervene method."""
+    """ctx-wrapper around `build_per_layer_hooks`: reads method/delta from cfg."""
     cfg = ctx.cfg.stages.intervene
     needs_features = cfg.method in ("sae_emd", "sae_clamp")
-    per_layer = _load_sae_feature_stats(ctx, layers) if needs_features else None
-
-    hooks: dict[int, callable] = {}
-    for layer in layers:
-        layer_stats = per_layer[layer] if per_layer is not None else None
-        hook_fn = _build_hook_dispatch(
-            cfg.method, directions[layer], alpha, ctx.saes[layer],
-            layer_stats=layer_stats,
-            sae_emd_delta=cfg.sae_emd_delta,
-        )
-        if not cfg.apply_during_generation:
-            hook_fn = _skip_decode_step(hook_fn)
-        hooks[layer] = hook_fn
-    return hooks
+    layer_stats = _load_sae_feature_stats(ctx, layers) if needs_features else None
+    return build_per_layer_hooks(
+        method=cfg.method,
+        sae_emd_delta=cfg.sae_emd_delta,
+        apply_during_generation=cfg.apply_during_generation,
+        layers=layers,
+        directions=directions,
+        alpha=alpha,
+        saes=ctx.saes,
+        layer_stats=layer_stats,
+    )
 
 
 def _log_sae_feature_summary(ctx: PipelineContext, layers: list[int]) -> None:

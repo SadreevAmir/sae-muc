@@ -213,29 +213,7 @@ class HFLocalBackend:
         if do_sample:
             gen_kwargs["temperature"] = temperature
 
-        layers = [int(hook_layer)] if isinstance(hook_layer, int) else [int(l) for l in hook_layer]
-
-        def _layer_fn(layer: int):
-            if isinstance(hook_fn, dict):
-                return hook_fn[layer]
-            return hook_fn
-
-        def _make_wrapper(fn):
-            def _wrapped(module, _inputs, output):
-                if isinstance(output, tuple):
-                    return (fn(output[0]),) + output[1:]
-                return fn(output)
-            return _wrapped
-
-        # Hard-coded `model.model.layers[i]` path: matches Llama / Mistral /
-        # Qwen2 architectures (HF naming `XxxForCausalLM` → `.model: XxxModel`
-        # → `.layers: nn.ModuleList[XxxDecoderLayer]`). For another family
-        # (Falcon, GPT-NeoX, Phi, …) the attribute walk needs an arch-specific
-        # resolver; out of scope for the current target models.
-        handles = [
-            self._model.model.layers[l].register_forward_hook(_make_wrapper(_layer_fn(l)))
-            for l in layers
-        ]
+        handles = self._register_residual_hooks(hook_layer, hook_fn)
         try:
             if seed is not None and do_sample:
                 torch.manual_seed(int(seed))
@@ -255,3 +233,215 @@ class HFLocalBackend:
                 ]
             )
         return result
+
+    # ----------------------------------------------------------------- #
+    # Shared hook registration                                           #
+    # ----------------------------------------------------------------- #
+
+    def _register_residual_hooks(self, hook_layer, hook_fn) -> list:
+        """Attach a forward hook to every requested transformer block.
+
+        `hook_layer` accepts int or list[int]; `hook_fn` is either a callable
+        applied to every layer or a Mapping[int, Callable] keyed by layer.
+        Returns the list of hook handles — caller is responsible for `.remove()`.
+
+        Hardcoded `model.model.layers[i]` path: Llama / Mistral / Qwen2 / Gemma2.
+        """
+        if hook_layer is None or hook_fn is None:
+            return []
+        layers = (
+            [int(hook_layer)]
+            if isinstance(hook_layer, int)
+            else [int(l) for l in hook_layer]
+        )
+
+        def _layer_fn(layer: int):
+            if isinstance(hook_fn, dict):
+                return hook_fn[layer]
+            return hook_fn
+
+        def _make_wrapper(fn):
+            def _wrapped(module, _inputs, output):
+                if isinstance(output, tuple):
+                    return (fn(output[0]),) + output[1:]
+                return fn(output)
+            return _wrapped
+
+        return [
+            self._model.model.layers[l].register_forward_hook(_make_wrapper(_layer_fn(l)))
+            for l in layers
+        ]
+
+    # ----------------------------------------------------------------- #
+    # Teacher-forced NLL (for perplexity diagnostics)                    #
+    # ----------------------------------------------------------------- #
+
+    def forward_nll_with_hook(
+        self,
+        text: str,
+        *,
+        hook_layer: int | list[int] | None = None,
+        hook_fn=None,
+        stride: int = 512,
+    ) -> tuple[float, int]:
+        """Sliding-window NLL of `text` under teacher forcing, with optional hook.
+
+        Returns `(sum_nll, n_tokens)`. Perplexity is `exp(sum_nll / n_tokens)`.
+        Stride overlap is masked with -100 per the HF perplexity recipe so the
+        same token isn't counted twice. softmax/log run in float32 even if the
+        model weights are bf16/fp16, to avoid tail-probability collapse.
+
+        Hook is applied for every forward (no decode-step skip — there is no
+        generation here, every position is "prefill").
+        """
+        import torch
+
+        self._ensure_loaded()
+        encoding = self._tokenizer(text, return_tensors="pt", add_special_tokens=False)
+        input_ids = encoding.input_ids.to(self._device)
+        n_full = int(input_ids.shape[1])
+        max_len = int(getattr(self._model.config, "max_position_embeddings", 2048))
+        # Pick a window size that is comfortable for short inputs and bounded
+        # by the model context. Stride controls the step between windows.
+        window = min(max(stride * 2, 256), max_len, n_full if n_full > 0 else 1)
+        stride = max(1, min(stride, window))
+
+        handles = self._register_residual_hooks(hook_layer, hook_fn)
+        sum_nll = 0.0
+        n_tokens = 0
+        try:
+            with torch.inference_mode():
+                prev_end = 0
+                for begin in range(0, n_full, stride):
+                    end = min(begin + window, n_full)
+                    window_ids = input_ids[:, begin:end]
+                    if window_ids.shape[1] < 2:
+                        break
+                    target_ids = window_ids.clone()
+                    # Mask the overlap with the previous window: only score
+                    # tokens that haven't been scored yet (HF recipe).
+                    trg_len = end - prev_end
+                    target_ids[:, :-trg_len] = -100
+                    out = self._model(window_ids, return_dict=True)
+                    logits = out.logits[:, :-1, :].float()
+                    labels = target_ids[:, 1:]
+                    mask = labels != -100
+                    if not bool(mask.any()):
+                        prev_end = end
+                        if end == n_full:
+                            break
+                        continue
+                    log_probs = torch.log_softmax(logits, dim=-1)
+                    safe_labels = labels.clamp(min=0)
+                    nll = -log_probs.gather(-1, safe_labels.unsqueeze(-1)).squeeze(-1)
+                    nll = nll * mask
+                    sum_nll += float(nll.sum().item())
+                    n_tokens += int(mask.sum().item())
+                    prev_end = end
+                    if end == n_full:
+                        break
+        finally:
+            for h in handles:
+                h.remove()
+        return sum_nll, n_tokens
+
+    # ----------------------------------------------------------------- #
+    # KL divergence between baseline and hooked distributions            #
+    # ----------------------------------------------------------------- #
+
+    def forward_kl_with_hook(
+        self,
+        prompts: list[str],
+        *,
+        hook_layer: int | list[int],
+        hook_fn,
+    ) -> dict[str, float]:
+        """KL(p_baseline || p_intervened) on `prompts`.
+
+        Runs two forwards per prompt (without and with hook). softmax/log
+        computed in float32. Reports:
+
+        * `mean_kl_all_positions` — averaged over every non-pad position.
+        * `mean_kl_last_prompt_token` — KL at the position that produces the
+          first generated token (the QA-relevant slot).
+        * `top1_disagreement_rate` — fraction of positions where argmax shifts.
+        * `top5_mass_delta` — mean of `|sum top-5 p_int − sum top-5 p_base|`,
+          a cheap signal for whether the distribution collapsed/spread.
+
+        Padding is right-aligned for position-aligned comparison.
+        """
+        import torch
+
+        self._ensure_loaded()
+        prev_side = self._tokenizer.padding_side
+        self._tokenizer.padding_side = "right"
+        try:
+            inputs = self._tokenizer(
+                prompts, return_tensors="pt", padding=True, add_special_tokens=True
+            ).to(self._device)
+        finally:
+            self._tokenizer.padding_side = prev_side
+
+        input_ids = inputs.input_ids
+        attn = inputs.attention_mask.bool()
+
+        with torch.inference_mode():
+            baseline_out = self._model(input_ids, attention_mask=inputs.attention_mask, return_dict=True)
+            baseline_logits = baseline_out.logits.float()
+
+            handles = self._register_residual_hooks(hook_layer, hook_fn)
+            try:
+                hooked_out = self._model(input_ids, attention_mask=inputs.attention_mask, return_dict=True)
+                hooked_logits = hooked_out.logits.float()
+            finally:
+                for h in handles:
+                    h.remove()
+
+        log_p = torch.log_softmax(baseline_logits, dim=-1)
+        log_q = torch.log_softmax(hooked_logits, dim=-1)
+        p = log_p.exp()
+        # KL(P || Q) = Σ p · (log p - log q), in nats.
+        kl = (p * (log_p - log_q)).sum(dim=-1)  # [B, T]
+        kl = torch.clamp(kl, min=0.0)  # numerical floor; KL is non-negative.
+        argmax_p = baseline_logits.argmax(dim=-1)
+        argmax_q = hooked_logits.argmax(dim=-1)
+        disagree = (argmax_p != argmax_q).float()  # [B, T]
+
+        # Top-5 mass shift.
+        p_soft = torch.softmax(baseline_logits, dim=-1)
+        q_soft = torch.softmax(hooked_logits, dim=-1)
+        top_p = p_soft.topk(min(5, p_soft.shape[-1]), dim=-1).values.sum(dim=-1)
+        top_q = q_soft.topk(min(5, q_soft.shape[-1]), dim=-1).values.sum(dim=-1)
+        top5_delta = (top_q - top_p).abs()
+
+        mask = attn.float()
+        n_positions = float(mask.sum().item())
+        if n_positions == 0:
+            return {
+                "mean_kl_all_positions": 0.0,
+                "mean_kl_last_prompt_token": 0.0,
+                "top1_disagreement_rate": 0.0,
+                "top5_mass_delta": 0.0,
+                "n_prompts": int(len(prompts)),
+                "n_tokens": 0,
+            }
+
+        mean_kl_all = float((kl * mask).sum().item() / n_positions)
+        disagree_rate = float((disagree * mask).sum().item() / n_positions)
+        top5_mean = float((top5_delta * mask).sum().item() / n_positions)
+
+        # Last prompt-token: attn.sum(-1) - 1 is its index per sequence.
+        last_idx = attn.long().sum(dim=-1) - 1
+        last_idx = last_idx.clamp(min=0)
+        batch_idx = torch.arange(kl.shape[0], device=kl.device)
+        last_kl = kl[batch_idx, last_idx]
+        mean_kl_last = float(last_kl.mean().item())
+
+        return {
+            "mean_kl_all_positions": mean_kl_all,
+            "mean_kl_last_prompt_token": mean_kl_last,
+            "top1_disagreement_rate": disagree_rate,
+            "top5_mass_delta": top5_mean,
+            "n_prompts": int(len(prompts)),
+            "n_tokens": int(n_positions),
+        }

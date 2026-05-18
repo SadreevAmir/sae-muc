@@ -113,16 +113,8 @@ class FakeBackend:
         different outputs. Multi-layer hooks are summed into a single hint.
         No real activations are touched.
         """
-        import torch
-
         _ = system, seed
-        layers = [int(hook_layer)] if isinstance(hook_layer, int) else [int(l) for l in hook_layer]
-        probe = torch.ones(1, 1, self._D_MODEL)
-        alpha_hint = 0.0
-        for l in layers:
-            fn = hook_fn[l] if isinstance(hook_fn, dict) else hook_fn
-            perturbed = fn(probe)
-            alpha_hint += float((perturbed - probe).sum().item())
+        alpha_hint = self._hook_perturbation_magnitude(hook_layer, hook_fn)
         tagged = [f"[hook:{alpha_hint:+.4f}] {p}" for p in prompts]
         return self.generate(
             tagged,
@@ -131,3 +123,71 @@ class FakeBackend:
             n=n,
             system=system,
         )
+
+    # --- diagnostics helpers --------------------------------------------------
+
+    def _hook_perturbation_magnitude(self, hook_layer, hook_fn) -> float:
+        """Sum-of-element shift produced by applying `hook_fn` to a constant
+        probe tensor. Used by `generate_with_hook` (signature in prompt) and
+        by `forward_nll_with_hook` / `forward_kl_with_hook` (drift magnitude).
+        Identity hooks return 0.0 exactly; SAE round-trip hooks return a tiny
+        float-precision residual even at α=0 — matches the real backend.
+        """
+        import torch
+
+        if hook_layer is None or hook_fn is None:
+            return 0.0
+        layers = (
+            [int(hook_layer)]
+            if isinstance(hook_layer, int)
+            else [int(l) for l in hook_layer]
+        )
+        probe = torch.ones(1, 1, self._D_MODEL)
+        total = 0.0
+        for l in layers:
+            fn = hook_fn[l] if isinstance(hook_fn, dict) else hook_fn
+            total += float((fn(probe) - probe).sum().item())
+        return total
+
+    def _deterministic_per_token_nll(self, text: str) -> float:
+        """A stable, text-dependent per-token NLL in [1.0, 2.0). Drives both
+        baseline and hooked perplexity so diagnostics tests can assert
+        ratio == 1.0 when the hook is identity.
+        """
+        digest = hashlib.sha256(text.encode()).digest()[:4]
+        return 1.0 + (int.from_bytes(digest, "big") % 1000) / 1000.0
+
+    def forward_nll_with_hook(
+        self,
+        text: str,
+        *,
+        hook_layer=None,
+        hook_fn=None,
+        stride: int = 512,
+    ) -> tuple[float, int]:
+        _ = stride
+        n_tokens = self.tokenize_length(text)
+        base = self._deterministic_per_token_nll(text)
+        delta = abs(self._hook_perturbation_magnitude(hook_layer, hook_fn))
+        # Hooked NLL = baseline + |delta| per token. Identity hook ⇒ delta == 0
+        # ⇒ sum_nll matches the baseline forward bit-exactly.
+        return (base + delta) * n_tokens, n_tokens
+
+    def forward_kl_with_hook(
+        self,
+        prompts: list[str],
+        *,
+        hook_layer,
+        hook_fn,
+    ) -> dict[str, float]:
+        delta = abs(self._hook_perturbation_magnitude(hook_layer, hook_fn))
+        n_tokens = sum(self.tokenize_length(p) for p in prompts)
+        # KL ≥ 0; identity hook ⇒ delta == 0 ⇒ KL == 0.
+        return {
+            "mean_kl_all_positions": float(delta),
+            "mean_kl_last_prompt_token": float(delta),
+            "top1_disagreement_rate": 1.0 if delta > 1e-6 else 0.0,
+            "top5_mass_delta": float(delta) * 0.1,
+            "n_prompts": int(len(prompts)),
+            "n_tokens": int(n_tokens),
+        }

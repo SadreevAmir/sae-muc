@@ -137,6 +137,34 @@ The full schema lives in [`config.py`](../src/sae_muc/config.py). Highlights:
   threshold for "Confident Hallucination Rate" in Tab.3. `kossen` is the
   paper-faithful default (mean of the baseline distribution).
 
+### `stages.diagnostics` — `DiagnosticsStage`
+
+Sidecar stage: intervention side-effect probes — perplexity, MMLU,
+HellaSwag, GSM8K (No-CoT), KL — paper doesn't run any of these. The
+standard steering-literature triad (Arditi 2024, CAA, ITI, RepE).
+See [QUICKSTART#diagnostics-artefacts](../QUICKSTART.md#diagnostics-artefacts).
+
+- `enabled: bool = true` — set `false` to skip the stage entirely (CI,
+  remote-only backends, etc.).
+- `corpora: list[Literal["wikitext","mmlu","hellaswag","gsm8k"]]` —
+  which benchmarks to score. Default: all four. Remove any to save time.
+- `corpus_n_chars: int = 300_000` — WikiText-2-raw-v1 validation cap.
+  `0` ⇒ synthetic test corpus (no HF download).
+- `n_mmlu / n_hellaswag / n_gsm8k: int = 200` — subset size per
+  benchmark. 200 ≈ ±2-3% absolute-accuracy noise, enough for relative
+  damage measurement; bump to 500 for more stable numbers, 1000 for
+  publication-grade.
+- `gsm8k_max_new_tokens: int = 32` — brief greedy generation budget for
+  the No-CoT GSM8K scorer.
+- `kl_max_prompts: int = 100` — KL is computed on the first N QA prompts
+  from `samples.parquet`.
+- `compare_methods: list[Literal["linear_vuf","sae_emd","sae_clamp","sae_projected"]]`
+  — when non-empty, the stage also runs an in-run sweep over these
+  methods. Empty (default) ⇒ per-variant from `intervention/meta.parquet`
+  only (the cross-run workflow).
+- `alpha_sweep: list[float]` — α values for the in-run sweep. Empty ⇒
+  sweep disabled regardless of `compare_methods`.
+
 ### `sae` — `SAEConfig`
 
 Per-layer SAE selection (Gemma-Scope and Llama-Scope train one SAE per
