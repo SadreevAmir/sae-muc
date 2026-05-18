@@ -247,6 +247,7 @@ def run(ctx: PipelineContext) -> list[str]:
         # Per-category directions — land in `vuf/category_meta.parquet`,
         # separate parquet so existing consumers of `meta.parquet` don't
         # see duplicate layer rows.
+        category_directions: dict[str, "torch.Tensor"] = {}
         if per_category_active:
             for variant, ids in (("abstain", abstain_ids), ("hedge", hedge_ids)):
                 if len(ids) < _MIN_CATEGORY_SIZE:
@@ -257,6 +258,7 @@ def run(ctx: PipelineContext) -> list[str]:
                     )
                     continue
                 d, n = _direction_from(ids)
+                category_directions[variant] = d
                 path = _direction_out_path(layer, variant)
                 ctx.store.save_safetensors(path, {"direction": d.contiguous()})
                 outputs.append(path)
@@ -268,6 +270,35 @@ def run(ctx: PipelineContext) -> list[str]:
                         "raw_norm": n,
                         "n_uncertain": len(ids),
                         "n_certain": len(certain_ids),
+                        "pooling": stage_cfg.pooling,
+                    }
+                )
+
+            # Cross-category direction: mean(h_abstain) − mean(h_hedge).
+            # Algebraically this is (raw_abstain - raw_hedge) where each
+            # `raw_X = mean(h_X) - mean(h_certain)`, so we derive it from the
+            # already-stacked means rather than re-stacking the per-question
+            # pooled tensors. NB: we use the L2-normalised category
+            # directions here for consistency with how downstream steering
+            # would use them — the resulting cross direction is then
+            # itself L2-normalised. Skip if either category was unavailable.
+            if "abstain" in category_directions and "hedge" in category_directions:
+                cross_raw = category_directions["abstain"] - category_directions["hedge"]
+                cross_norm = cross_raw.norm().item()
+                cross_dir = cross_raw / cross_norm if cross_norm > 0 else cross_raw
+                cross_path = _direction_out_path(layer, "abstain_vs_hedge")
+                ctx.store.save_safetensors(
+                    cross_path, {"direction": cross_dir.contiguous()}
+                )
+                outputs.append(cross_path)
+                category_meta.append(
+                    {
+                        "layer": layer,
+                        "variant": "abstain_vs_hedge",
+                        "path": cross_path,
+                        "raw_norm": float(cross_norm),
+                        "n_uncertain": len(abstain_ids) + len(hedge_ids),
+                        "n_certain": 0,  # cross direction uses no certain pool
                         "pooling": stage_cfg.pooling,
                     }
                 )

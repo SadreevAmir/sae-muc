@@ -60,6 +60,7 @@ OUTPUT_BENCH = "diagnostics/benchmarks.parquet"
 OUTPUT_KL = "diagnostics/kl.parquet"
 OUTPUT_SWEEP = "diagnostics/method_alpha_sweep.parquet"
 OUTPUT_CATEGORY = "diagnostics/category_directions.parquet"
+OUTPUT_CATEGORY_SAE = "diagnostics/category_sae_jaccards.parquet"
 OUTPUT_SUMMARY = "diagnostics/summary.json"
 
 _SAE_FEATURE_METHODS = ("sae_emd", "sae_clamp")
@@ -343,6 +344,11 @@ def _compute_category_cosines(ctx: PipelineContext) -> list[dict] | None:
         r_main = _load(main_path)
         r_abstain = _load(by_variant["abstain"]) if "abstain" in by_variant else None
         r_hedge = _load(by_variant["hedge"]) if "hedge" in by_variant else None
+        r_cross = (
+            _load(by_variant["abstain_vs_hedge"])
+            if "abstain_vs_hedge" in by_variant
+            else None
+        )
 
         n_abstain = (
             int(cat_rows[cat_rows["variant"] == "abstain"].iloc[0]["n_uncertain"])
@@ -358,19 +364,94 @@ def _compute_category_cosines(ctx: PipelineContext) -> list[dict] | None:
         rows.append(
             {
                 "layer": int(layer),
+                # disentanglement: are abstain and hedge two axes (cos≈0)
+                # or one (cos≈1)?
                 "cosine_abstain_hedge": (
                     _cos(r_abstain, r_hedge)
                     if r_abstain is not None and r_hedge is not None
                     else float("nan")
                 ),
+                # alignment: how much of paper's `main` direction is
+                # actually each per-category direction?
                 "cosine_abstain_main": (
                     _cos(r_abstain, r_main) if r_abstain is not None else float("nan")
                 ),
                 "cosine_hedge_main": (
                     _cos(r_hedge, r_main) if r_hedge is not None else float("nan")
                 ),
+                # cross axis: r_abstain − r_hedge — the steering direction
+                # that flips uncertain *type* (abstain ↔ hedge) without
+                # changing overall uncertainty level. cosine_cross_main
+                # measures whether paper's main VUF accidentally encodes
+                # this type-flip axis (high) or is purely the
+                # uncertain-vs-certain axis (low).
+                "cosine_cross_main": (
+                    _cos(r_cross, r_main) if r_cross is not None else float("nan")
+                ),
                 "n_abstain": n_abstain,
                 "n_hedge": n_hedge,
+            }
+        )
+    return rows
+
+
+def _compute_category_sae_jaccards(ctx: PipelineContext) -> list[dict] | None:
+    """Per-layer Jaccard between SAE-feature top-K sets across main /
+    abstain / hedge variants.
+
+    `Jaccard(A, B) = |A ∩ B| / |A ∪ B|` ∈ [0, 1].
+        ≈ 0 — disjoint top-K sets → SAE encodes the categories with
+              different features (positive disentanglement signal).
+        ≈ 1 — same top-K → SAE sees them as the same concept.
+
+    Reads `sae_features/stats.parquet` (main) and
+    `sae_features/category_stats.parquet` (per-variant). Returns None
+    when no per-category SAE work was done.
+    """
+    if not ctx.store.exists("sae_features/category_stats.parquet"):
+        return None
+    cat_stats = ctx.store.load_parquet("sae_features/category_stats.parquet")
+    if cat_stats.empty:
+        return None
+    if not ctx.store.exists("sae_features/stats.parquet"):
+        return None
+    main_stats = ctx.store.load_parquet("sae_features/stats.parquet")
+
+    def _topk_set(df: pd.DataFrame) -> set[int]:
+        return {int(x) for x in df[df["selected_as"] == "uncertainty"]["feature_id"].tolist()}
+
+    def _jaccard(a: set[int], b: set[int]) -> float:
+        if not a and not b:
+            return float("nan")
+        union = a | b
+        if not union:
+            return float("nan")
+        return len(a & b) / len(union)
+
+    rows: list[dict] = []
+    layers = sorted(set(int(x) for x in cat_stats["layer"].tolist()))
+    for layer in layers:
+        main_layer = main_stats[main_stats["layer"] == layer]
+        cat_layer = cat_stats[cat_stats["layer"] == layer]
+        if main_layer.empty:
+            continue
+        main_top = _topk_set(main_layer)
+        abstain_top = _topk_set(cat_layer[cat_layer["variant"] == "abstain"])
+        hedge_top = _topk_set(cat_layer[cat_layer["variant"] == "hedge"])
+        # Skip layers where neither category got any features.
+        if not abstain_top and not hedge_top:
+            continue
+        rows.append(
+            {
+                "layer": int(layer),
+                # Headline number — analogous to cosine_abstain_hedge for
+                # linear directions but for the discrete SAE feature view.
+                "jaccard_abstain_hedge": _jaccard(abstain_top, hedge_top),
+                "jaccard_abstain_main": _jaccard(abstain_top, main_top),
+                "jaccard_hedge_main": _jaccard(hedge_top, main_top),
+                "n_main_topk": int(len(main_top)),
+                "n_abstain_topk": int(len(abstain_top)),
+                "n_hedge_topk": int(len(hedge_top)),
             }
         )
     return rows
@@ -553,6 +634,15 @@ def run(ctx: PipelineContext) -> list[str]:
     if cat_rows:
         ctx.store.save_parquet(OUTPUT_CATEGORY, pd.DataFrame(cat_rows))
         outputs.append(OUTPUT_CATEGORY)
+
+    # SAE-feature Jaccard analysis — second, independent disentanglement
+    # readout. Linear cosines might say "same axis" while SAE jaccards
+    # say "different features" — that's the interesting case (SAE picks
+    # up structure the linear probe misses).
+    sae_rows = _compute_category_sae_jaccards(ctx)
+    if sae_rows:
+        ctx.store.save_parquet(OUTPUT_CATEGORY_SAE, pd.DataFrame(sae_rows))
+        outputs.append(OUTPUT_CATEGORY_SAE)
 
     summary = {
         "skipped": False,

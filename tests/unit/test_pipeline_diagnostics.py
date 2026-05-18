@@ -458,6 +458,7 @@ def test_sae_features_runs_when_compare_methods_demands_sae(fake_ctx, fake_hf_ro
     object.__setattr__(fake_ctx, "cfg", new_cfg)
     outputs = sae_features.run(fake_ctx)
     # Without the un-gating fix this would early-return with [] because
-    # the primary method is linear_vuf.
-    assert outputs == ["sae_features/stats.parquet"]
+    # the primary method is linear_vuf. `category_stats.parquet` is also
+    # in the output list (empty stub here — no per-category labels).
+    assert "sae_features/stats.parquet" in outputs
     assert fake_ctx.store.exists("sae_features/stats.parquet")

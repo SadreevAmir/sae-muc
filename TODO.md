@@ -99,15 +99,38 @@ alongside the desired Confident Hallucination Rate decrease.
       ready-to-paste Python snippet, configs/README entries for
       `stages.categorize` + `vuf.per_category`.
 
-Deferred extensions (next iteration if cosines show disentanglement):
+Iteration 2 (done): cross direction + per-category SAE features:
+- [x] `r_abstain_vs_hedge = normalize(r_abstain − r_hedge)` persisted as
+      `vuf/direction_abstain_vs_hedge_layer_{L}.safetensors`. This is the
+      direct steering axis for flipping uncertain *type* (abstain ↔ hedge)
+      without changing overall uncertainty level. Algebraically derived
+      from the two per-category directions, so no extra hidden-state pass.
+- [x] `diagnostics/category_directions.parquet` gained `cosine_cross_main`
+      column — measures whether paper's lumped VUF is accidentally
+      encoding the type-flip axis (high) or only the
+      uncertain-vs-certain axis (low).
+- [x] `sae_features.run` extended: when `vuf.per_category` is on and
+      `vuf/splits.parquet` carries category labels, runs additional
+      Cohen's d per category against the shared certain pool. Output:
+      `sae_features/category_stats.parquet` (separate parquet, legacy
+      `stats.parquet` schema preserved for `sae_emd`/`sae_clamp` hooks).
+      Selection mode locked to `topk` here (consensus filter on small
+      per-category buckets is too noisy).
+- [x] `diagnostics/category_sae_jaccards.parquet` — per-layer Jaccard
+      between top-K feature sets across main / abstain / hedge variants.
+      Two-view triangulation: if VUF cosines say "same axis" but SAE
+      Jaccards say "disjoint features", that's the publish-worthy
+      result ("SAE picks up structure linear probes miss").
+- [x] 29 unit-tests + 253/253 full suite green.
+
+Deferred extensions (next iteration if cosines/jaccards show disentanglement):
 - [ ] Per-category intervention in `intervene.run` — `α_abstain·r_abstain
-      + α_hedge·r_hedge` as a single hook. Config shape reserved as
+      + α_hedge·r_hedge` as a single hook, or steering on the cross
+      direction `α·r_abstain_vs_hedge`. Config shape reserved as
       `intervene.directions: list[str]` + `intervene.alphas: list[float]`
-      but not implemented. Needed once the cosine analysis confirms
-      directions are separable.
-- [ ] Per-category SAE feature analysis — same `sae_features` machinery
-      but Cohen's d against per-category split. Will reveal whether
-      uncertainty SAE features cluster by behaviour-type.
+      but not implemented.
+- [ ] Per-category SAE intervention — `sae_emd` / `sae_clamp` reading
+      from `category_stats.parquet` instead of (or alongside) `stats.parquet`.
 - [ ] Additional categories: RANGE (numeric imprecision), CONDITIONAL
       ("it depends"), UNIVERSAL ("experts disagree"). MVP only needs
       ABSTAIN vs HEDGE because they're the two dominant types in

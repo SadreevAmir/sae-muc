@@ -37,6 +37,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 OUTPUT = "sae_features/stats.parquet"
+# Per-category SAE feature stats — separate parquet so the legacy
+# `sae_features/stats.parquet` consumers (intervene's sae_emd / sae_clamp
+# hooks) keep their byte-identical schema.
+OUTPUT_CATEGORY = "sae_features/category_stats.parquet"
 
 # The SAE feature analysis is only required by interventions that consume
 # the (uncertainty / certainty) feature-index lists. For linear_vuf and
@@ -163,6 +167,23 @@ def run(ctx: PipelineContext) -> list[str]:
     uncertain_ids = splits[splits["split"] == "uncertain"]["sample_id"].tolist()
     certain_ids = splits[splits["split"] == "certain"]["sample_id"].tolist()
 
+    # Per-category SAE feature analysis runs when `vuf.per_category` is on
+    # AND `vuf/splits.parquet` carries non-empty category labels from
+    # `categorize_uncertainty.run`. Mirrors how `vuf.run` decides whether
+    # to build per-category directions. Reuses the same shared certain
+    # pool (paper-style mitigation reference).
+    per_category_active = (
+        bool(getattr(vuf_cfg, "per_category", False))
+        and "category" in splits.columns
+        and splits["category"].isin(["ABSTAIN", "HEDGE"]).any()
+    )
+    if per_category_active:
+        abstain_ids = splits[splits["category"] == "ABSTAIN"]["sample_id"].tolist()
+        hedge_ids = splits[splits["category"] == "HEDGE"]["sample_id"].tolist()
+    else:
+        abstain_ids = []
+        hedge_ids = []
+
     if len(uncertain_ids) < 2 or len(certain_ids) < 2:
         log.warning(
             "sae_features: tiny splits (n_uncertain=%d, n_certain=%d); "
@@ -179,6 +200,7 @@ def run(ctx: PipelineContext) -> list[str]:
 
     hs_meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
     rows: list[dict] = []
+    category_rows: list[dict] = []
 
     for target_layer in target_layers:
         sae = ctx.saes[target_layer]
@@ -266,5 +288,72 @@ def run(ctx: PipelineContext) -> list[str]:
                 "selected_as": selected,
             })
 
+        # Per-category Cohen's d — uses the SAME `f_c` reference pool as
+        # the main analysis, so the resulting top-K lists are comparable
+        # via Jaccard with the main `uncertainty_idx`. Selection mode
+        # locked to `topk` here regardless of `selection_mode` — consensus
+        # filter on small per-category buckets is too noisy to be useful.
+        if per_category_active:
+            for variant, ids in (("abstain", abstain_ids), ("hedge", hedge_ids)):
+                if len(ids) < 2:
+                    log.warning(
+                        "sae_features.per_category: layer %d skipping %s "
+                        "(only %d members)",
+                        target_layer, variant, len(ids),
+                    )
+                    continue
+                X_v = torch.stack([pooled(sid) for sid in ids]).float()
+                f_v = sae.encode(X_v)
+                d_v = _cohens_d(f_v, f_c)
+                order_desc = d_v.argsort(descending=True).tolist()
+                order_asc = d_v.argsort(descending=False).tolist()
+                idx_unc = set(order_desc[:k])
+                idx_cer = set(order_asc[:k])
+                idx_cer -= idx_unc
+                mean_v = f_v.mean(dim=0)
+                for i in range(sae.d_latent):
+                    if i in idx_unc:
+                        sel = "uncertainty"
+                    elif i in idx_cer:
+                        sel = "certainty"
+                    else:
+                        sel = ""
+                    category_rows.append({
+                        "feature_id": i,
+                        "layer": target_layer,
+                        "variant": variant,
+                        "cohen_d": float(d_v[i].item()),
+                        "mean_uncertain": float(mean_v[i].item()),
+                        "mean_certain": float(mean_c[i].item()),
+                        "selected_as": sel,
+                    })
+                log.info(
+                    "sae_features.per_category layer=%d variant=%s: "
+                    "%d uncertainty + %d certainty features (n=%d)",
+                    target_layer, variant, len(idx_unc), len(idx_cer), len(ids),
+                )
+
+    outputs: list[str] = [OUTPUT]
     ctx.store.save_parquet(OUTPUT, pd.DataFrame(rows))
-    return [OUTPUT]
+
+    # Always write category_stats — empty parquet keeps the manifest stable
+    # across re-runs with the flag toggled. Schema is stable.
+    if category_rows:
+        ctx.store.save_parquet(OUTPUT_CATEGORY, pd.DataFrame(category_rows))
+    else:
+        ctx.store.save_parquet(
+            OUTPUT_CATEGORY,
+            pd.DataFrame(
+                {
+                    "feature_id": pd.Series([], dtype="int64"),
+                    "layer": pd.Series([], dtype="int64"),
+                    "variant": pd.Series([], dtype="object"),
+                    "cohen_d": pd.Series([], dtype="float64"),
+                    "mean_uncertain": pd.Series([], dtype="float64"),
+                    "mean_certain": pd.Series([], dtype="float64"),
+                    "selected_as": pd.Series([], dtype="object"),
+                }
+            ),
+        )
+    outputs.append(OUTPUT_CATEGORY)
+    return outputs

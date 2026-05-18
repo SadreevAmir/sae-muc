@@ -151,14 +151,42 @@ stages:
     per_category: true
 ```
 
-Quick read:
+Quick read — three artefacts answer the disentanglement question from
+two angles:
 
 ```python
 import pandas as pd
+
+# 1. Linear (VUF) view — cosines per layer.
 cosines = pd.read_parquet("data/runs/<run_id>/diagnostics/category_directions.parquet")
-# columns: layer, cosine_abstain_hedge, cosine_abstain_main, cosine_hedge_main, n_abstain, n_hedge
-print(cosines)
+# columns: layer, cosine_abstain_hedge, cosine_abstain_main, cosine_hedge_main,
+#          cosine_cross_main, n_abstain, n_hedge
+#   cosine_abstain_hedge ≈ 0 ⇒ ABSTAIN and HEDGE are distinct residual-stream
+#       axes → per-category steering viable.
+#   cosine_abstain_hedge ≈ 1 ⇒ same axis, paper's lumped VUF is honest.
+#   cosine_cross_main ≈ |large| ⇒ paper's main VUF actually encodes the
+#       abstain↔hedge type-flip axis, not just uncertain-vs-certain.
+
+# 2. SAE-feature view — Jaccard between top-K feature sets per layer.
+jaccards = pd.read_parquet("data/runs/<run_id>/diagnostics/category_sae_jaccards.parquet")
+# columns: layer, jaccard_abstain_hedge, jaccard_abstain_main, jaccard_hedge_main,
+#          n_main_topk, n_abstain_topk, n_hedge_topk
+#   jaccard_abstain_hedge ≈ 0 ⇒ SAE encodes the categories with disjoint
+#       feature sets → per-category SAE steering should work.
+#   jaccard_abstain_hedge ≈ 1 ⇒ same features, different weights.
+
+# 3. Cross direction (paper VUF axis between two uncertain types) is
+#    just one row in category_directions — the cosine_cross_main column —
+#    plus a usable safetensors file:
+#    `vuf/direction_abstain_vs_hedge_layer_{L}.safetensors`
+#    Steering α>0 on this direction flips HEDGE → ABSTAIN (more refusal),
+#    α<0 flips ABSTAIN → HEDGE (more substantive answer with caveats).
 ```
+
+**Cross-checking the two views.** If `cosine_abstain_hedge` is high but
+`jaccard_abstain_hedge` is low → linear probes are too coarse, but SAE
+sees the structure (publish-worthy result). If both agree (both high or
+both low), the answer is unambiguous.
 
 Categories: API cost roughly doubles judge spending on the uncertain bucket
 only (certain-bucket questions are skipped — labels there are meaningless).

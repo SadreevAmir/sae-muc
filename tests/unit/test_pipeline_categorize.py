@@ -295,8 +295,9 @@ def test_vuf_per_category_writes_three_direction_families(fake_ctx):
         assert f"vuf/direction_hedge_layer_{l}.safetensors" in outputs
 
     cat_meta = fake_ctx.store.load_parquet("vuf/category_meta.parquet")
-    assert set(cat_meta["variant"]) == {"abstain", "hedge"}
-    assert len(cat_meta) == n_layers * 2
+    # Three variants per layer: abstain, hedge, abstain_vs_hedge (cross).
+    assert set(cat_meta["variant"]) == {"abstain", "hedge", "abstain_vs_hedge"}
+    assert len(cat_meta) == n_layers * 3
 
     # Each direction is L2-normalised (norm ≈ 1.0).
     for path in (
@@ -425,3 +426,283 @@ def test_diagnostics_category_cosines_returns_none_when_meta_empty(fake_ctx):
         }),
     )
     assert diagnostics._compute_category_cosines(fake_ctx) is None
+
+
+# ---------- cross direction (r_abstain_vs_hedge) -----------------------------
+
+
+def test_vuf_per_category_writes_abstain_vs_hedge_direction(fake_ctx):
+    """When both abstain and hedge directions are built, the cross direction
+    r_abstain − r_hedge (L2-normalised) is also persisted, with its own
+    `variant='abstain_vs_hedge'` row in category_meta.parquet."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    samples_df = fake_ctx.store.load_parquet("samples.parquet")
+    sids = list(samples_df["sample_id"])
+    _seed_full_vuf_inputs(
+        fake_ctx, abstain_sids=sids[:2], hedge_sids=sids[2:4], certain_sids=sids[4:],
+    )
+    _enable_categorize(fake_ctx, enabled=True, per_category=True)
+    outputs = vuf.run(fake_ctx)
+
+    n_layers = 4
+    for l in range(n_layers):
+        cross_path = f"vuf/direction_abstain_vs_hedge_layer_{l}.safetensors"
+        assert cross_path in outputs
+        d = fake_ctx.store.load_safetensors(cross_path)["direction"]
+        assert torch.allclose(d.norm(), torch.tensor(1.0), atol=1e-5)
+
+    cat_meta = fake_ctx.store.load_parquet("vuf/category_meta.parquet")
+    assert "abstain_vs_hedge" in set(cat_meta["variant"])
+
+
+def test_vuf_cross_direction_equals_normalised_difference(fake_ctx):
+    """Math sanity: persisted cross direction == normalize(r_abstain − r_hedge)."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    samples_df = fake_ctx.store.load_parquet("samples.parquet")
+    sids = list(samples_df["sample_id"])
+    _seed_full_vuf_inputs(
+        fake_ctx, abstain_sids=sids[:2], hedge_sids=sids[2:4], certain_sids=sids[4:],
+    )
+    _enable_categorize(fake_ctx, enabled=True, per_category=True)
+    vuf.run(fake_ctx)
+
+    r_a = fake_ctx.store.load_safetensors(
+        "vuf/direction_abstain_layer_0.safetensors"
+    )["direction"]
+    r_h = fake_ctx.store.load_safetensors(
+        "vuf/direction_hedge_layer_0.safetensors"
+    )["direction"]
+    r_cross = fake_ctx.store.load_safetensors(
+        "vuf/direction_abstain_vs_hedge_layer_0.safetensors"
+    )["direction"]
+
+    diff = r_a - r_h
+    expected = diff / diff.norm()
+    assert torch.allclose(r_cross, expected, atol=1e-5)
+
+
+def test_vuf_cross_direction_skipped_when_one_category_missing(fake_ctx):
+    """Only abstain has ≥2 members → no cross direction (needs both)."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    samples_df = fake_ctx.store.load_parquet("samples.parquet")
+    sids = list(samples_df["sample_id"])
+    _seed_full_vuf_inputs(
+        fake_ctx, abstain_sids=sids[:2], hedge_sids=[], certain_sids=sids[2:],
+    )
+    _enable_categorize(fake_ctx, enabled=True, per_category=True)
+    outputs = vuf.run(fake_ctx)
+    assert not any("direction_abstain_vs_hedge" in p for p in outputs)
+
+
+def test_diagnostics_cosine_cross_main_present_when_cross_artefact_exists(fake_ctx):
+    layers = (0, 1)
+    d_model = 8
+    main_meta = pd.DataFrame({
+        "layer": list(layers),
+        "path": [f"vuf/direction_layer_{l}.safetensors" for l in layers],
+        "raw_norm": [1.0] * len(layers),
+        "n_uncertain": [3] * len(layers),
+        "n_certain": [3] * len(layers),
+        "pooling": ["last_token_q"] * len(layers),
+    })
+    cat_meta_rows = []
+    for l in layers:
+        for variant in ("abstain", "hedge", "abstain_vs_hedge"):
+            cat_meta_rows.append({
+                "layer": l,
+                "variant": variant,
+                "path": f"vuf/direction_{variant}_layer_{l}.safetensors",
+                "raw_norm": 1.0,
+                "n_uncertain": 3,
+                "n_certain": 3 if variant != "abstain_vs_hedge" else 0,
+                "pooling": "last_token_q",
+            })
+    fake_ctx.store.save_parquet("vuf/meta.parquet", main_meta)
+    fake_ctx.store.save_parquet("vuf/category_meta.parquet", pd.DataFrame(cat_meta_rows))
+    rng = torch.Generator().manual_seed(0)
+    for l in layers:
+        for variant in ("", "abstain_", "hedge_", "abstain_vs_hedge_"):
+            v = torch.randn(d_model, generator=rng)
+            v = v / v.norm()
+            name = (
+                f"vuf/direction_layer_{l}.safetensors"
+                if variant == ""
+                else f"vuf/direction_{variant}layer_{l}.safetensors"
+            )
+            fake_ctx.store.save_safetensors(name, {"direction": v.contiguous()})
+
+    rows = diagnostics._compute_category_cosines(fake_ctx)
+    assert rows is not None
+    for r in rows:
+        assert "cosine_cross_main" in r
+        assert -1.0 - 1e-6 <= r["cosine_cross_main"] <= 1.0 + 1e-6
+
+
+# ---------- per-category SAE features + Jaccard ------------------------------
+
+
+def _seed_sae_features_inputs(
+    fake_ctx, *, abstain_sids: list[str], hedge_sids: list[str], certain_sids: list[str],
+):
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    uncertain = abstain_sids + hedge_sids
+    _seed_judge_scores(fake_ctx, uncertain_sids=uncertain, certain_sids=certain_sids)
+    _enable_categorize(fake_ctx, enabled=True, per_category=True)
+    rows = []
+    for sid in abstain_sids:
+        rows.append({
+            "level": "question", "sample_id": sid, "gen_idx": -1,
+            "category": "ABSTAIN", "raw": "",
+            "n_abstain": 3, "n_hedge": 0, "n_confident": 0, "n_unparsed": 0,
+        })
+    for sid in hedge_sids:
+        rows.append({
+            "level": "question", "sample_id": sid, "gen_idx": -1,
+            "category": "HEDGE", "raw": "",
+            "n_abstain": 0, "n_hedge": 3, "n_confident": 0, "n_unparsed": 0,
+        })
+    fake_ctx.store.save_parquet("categories.parquet", pd.DataFrame(rows))
+    vuf.run(fake_ctx)
+
+
+def test_sae_features_per_category_writes_variant_stats(fake_ctx):
+    from sae_muc.pipeline import sae_features
+
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    samples_df = fake_ctx.store.load_parquet("samples.parquet")
+    sids = list(samples_df["sample_id"])
+    _seed_sae_features_inputs(
+        fake_ctx, abstain_sids=sids[:2], hedge_sids=sids[2:4], certain_sids=sids[4:],
+    )
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"method": "sae_emd", "layer": 1},
+                    ),
+                }
+            ),
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    outputs = sae_features.run(fake_ctx)
+    assert "sae_features/stats.parquet" in outputs
+    assert "sae_features/category_stats.parquet" in outputs
+    cat = fake_ctx.store.load_parquet("sae_features/category_stats.parquet")
+    assert set(cat["variant"]) == {"abstain", "hedge"}
+    assert (cat["selected_as"].isin(["uncertainty", "certainty", ""])).all()
+
+
+def test_sae_features_per_category_empty_when_no_labels(fake_ctx):
+    from sae_muc.pipeline import sae_features
+
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    hidden_states.run(fake_ctx)
+    samples_df = fake_ctx.store.load_parquet("samples.parquet")
+    sids = list(samples_df["sample_id"])
+    _seed_judge_scores(fake_ctx, uncertain_sids=sids[:2], certain_sids=sids[2:])
+    vuf.run(fake_ctx)
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"method": "sae_emd", "layer": 1},
+                    ),
+                }
+            ),
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    sae_features.run(fake_ctx)
+    cat = fake_ctx.store.load_parquet("sae_features/category_stats.parquet")
+    assert len(cat) == 0
+
+
+def test_diagnostics_sae_jaccards_computed_correctly(fake_ctx):
+    import pytest as _pt
+
+    main_rows = []
+    for l in (0, 1):
+        for fid in range(8):
+            main_rows.append({
+                "feature_id": fid, "layer": l, "cohen_d": 0.0,
+                "mean_uncertain": 0.0, "mean_certain": 0.0,
+                "selected_as": "uncertainty" if fid < 4 else "",
+            })
+    fake_ctx.store.save_parquet("sae_features/stats.parquet", pd.DataFrame(main_rows))
+
+    cat_rows = []
+    for fid in range(8):
+        cat_rows.append({
+            "feature_id": fid, "layer": 0, "variant": "abstain",
+            "cohen_d": 0.0, "mean_uncertain": 0.0, "mean_certain": 0.0,
+            "selected_as": "uncertainty" if fid in (0, 1, 4, 5) else "",
+        })
+        cat_rows.append({
+            "feature_id": fid, "layer": 0, "variant": "hedge",
+            "cohen_d": 0.0, "mean_uncertain": 0.0, "mean_certain": 0.0,
+            "selected_as": "uncertainty" if fid in (1, 2, 3, 6) else "",
+        })
+        cat_rows.append({
+            "feature_id": fid, "layer": 1, "variant": "abstain",
+            "cohen_d": 0.0, "mean_uncertain": 0.0, "mean_certain": 0.0,
+            "selected_as": "uncertainty" if fid in (0, 1) else "",
+        })
+        cat_rows.append({
+            "feature_id": fid, "layer": 1, "variant": "hedge",
+            "cohen_d": 0.0, "mean_uncertain": 0.0, "mean_certain": 0.0,
+            "selected_as": "uncertainty" if fid in (6, 7) else "",
+        })
+    fake_ctx.store.save_parquet(
+        "sae_features/category_stats.parquet", pd.DataFrame(cat_rows)
+    )
+
+    rows = diagnostics._compute_category_sae_jaccards(fake_ctx)
+    assert rows is not None and len(rows) == 2
+    by_layer = {r["layer"]: r for r in rows}
+    # Layer 0: abstain={0,1,4,5}, hedge={1,2,3,6}, main={0,1,2,3}.
+    assert by_layer[0]["jaccard_abstain_hedge"] == _pt.approx(1 / 7)
+    assert by_layer[0]["jaccard_abstain_main"] == _pt.approx(1 / 3)
+    assert by_layer[0]["jaccard_hedge_main"] == _pt.approx(3 / 5)
+    # Layer 1: disjoint.
+    assert by_layer[1]["jaccard_abstain_hedge"] == _pt.approx(0.0)
+
+
+def test_diagnostics_sae_jaccards_returns_none_when_no_artefacts(fake_ctx):
+    assert diagnostics._compute_category_sae_jaccards(fake_ctx) is None
+
+
+def test_diagnostics_sae_jaccards_returns_none_when_category_empty(fake_ctx):
+    fake_ctx.store.save_parquet(
+        "sae_features/stats.parquet",
+        pd.DataFrame({
+            "feature_id": [0], "layer": [0], "cohen_d": [0.0],
+            "mean_uncertain": [0.0], "mean_certain": [0.0], "selected_as": [""],
+        }),
+    )
+    fake_ctx.store.save_parquet(
+        "sae_features/category_stats.parquet",
+        pd.DataFrame({
+            "feature_id": pd.Series([], dtype="int64"),
+            "layer": pd.Series([], dtype="int64"),
+            "variant": pd.Series([], dtype="object"),
+            "cohen_d": pd.Series([], dtype="float64"),
+            "mean_uncertain": pd.Series([], dtype="float64"),
+            "mean_certain": pd.Series([], dtype="float64"),
+            "selected_as": pd.Series([], dtype="object"),
+        }),
+    )
+    assert diagnostics._compute_category_sae_jaccards(fake_ctx) is None

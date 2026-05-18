@@ -115,11 +115,19 @@ See [QUICKSTART#per-category-vuf](../QUICKSTART.md#per-category-vuf).
   to pool the per-token hidden state. Paper default `last_token_q`.
 - `per_category: bool = false` — when both this flag and
   `categorize.enabled` are on AND `categories.parquet` has labelled
-  question-rows, the stage builds two extra directions in
-  `vuf/direction_abstain_layer_{L}.safetensors` /
-  `vuf/direction_hedge_layer_{L}.safetensors` against the shared certain
-  pool. Metadata lands in `vuf/category_meta.parquet` (separate from the
-  legacy `vuf/meta.parquet` to keep existing consumers byte-compatible).
+  question-rows, the stage builds **three** extra directions per layer
+  against the shared certain pool:
+    1. `vuf/direction_abstain_layer_{L}.safetensors` — `mean(h_abstain) − mean(h_certain)`.
+    2. `vuf/direction_hedge_layer_{L}.safetensors` — `mean(h_hedge) − mean(h_certain)`.
+    3. `vuf/direction_abstain_vs_hedge_layer_{L}.safetensors` —
+       L2-normalised `r_abstain − r_hedge`. The cross-axis between two
+       uncertain types; steering α>0 should flip HEDGE→ABSTAIN, α<0
+       ABSTAIN→HEDGE.
+  Metadata lands in `vuf/category_meta.parquet` (separate from the legacy
+  `vuf/meta.parquet` to keep existing consumers byte-compatible).
+  `sae_features` reads the same `vuf/splits.parquet` `category` column
+  and additionally builds per-variant Cohen's d → `sae_features/category_stats.parquet`,
+  enabling Jaccard analysis in `diagnostics`.
 
 ### `stages.intervene` — `InterveneStage`
 - `method: "linear_vuf" | "sae_emd" | "sae_clamp" | "sae_projected"` —
