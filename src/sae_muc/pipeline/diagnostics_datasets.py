@@ -246,7 +246,14 @@ def score_hellaswag(
     hook_layer=None,
     hook_fn=None,
 ) -> dict[str, float]:
-    """HellaSwag accuracy + mean *length-normalised* NLL of the gold ending."""
+    """HellaSwag accuracy + length-normalised NLL of the (stem+gold) sequence.
+
+    NB: `mean_nll` averages over the full prompt+continuation, not the gold
+    ending in isolation — `forward_nll_with_hook` returns the joint sum_nll
+    and we divide by the joint token count. Argmin across choices still picks
+    the right continuation (shared stem cancels), and the same quantity is
+    computed for baseline vs hooked, so it remains a clean α-drift signal.
+    """
     if not items:
         return {"accuracy": float("nan"), "mean_nll": float("nan"), "n": 0}
     correct = 0
@@ -287,8 +294,9 @@ def score_gsm8k(
 
     Accuracy is intentionally low without CoT (5–15% on small models) — the
     important signal is the *delta* between α=0 and α≠0, not the absolute.
-    We also report mean teacher-forced NLL on the gold answer text, which
-    is a cleaner ppl-drift proxy.
+    `mean_nll` is the per-token NLL of the `prompt + gold_text` joint
+    sequence (same caveat as `score_hellaswag`: not continuation-only, but
+    consistent across α and hence a valid drift proxy).
     """
     if not items:
         return {

@@ -274,14 +274,15 @@ def run(ctx: PipelineContext) -> list[str]:
                     }
                 )
 
-            # Cross-category direction: mean(h_abstain) − mean(h_hedge).
-            # Algebraically this is (raw_abstain - raw_hedge) where each
-            # `raw_X = mean(h_X) - mean(h_certain)`, so we derive it from the
-            # already-stacked means rather than re-stacking the per-question
-            # pooled tensors. NB: we use the L2-normalised category
-            # directions here for consistency with how downstream steering
-            # would use them — the resulting cross direction is then
-            # itself L2-normalised. Skip if either category was unavailable.
+            # Cross-category direction: normalize(unit_abstain − unit_hedge),
+            # where unit_X is the L2-normalised category direction (i.e. the
+            # version downstream steering hooks would actually use). The
+            # `certain` reference cancels because both inputs share it before
+            # normalisation, but the magnitudes don't — using unit vectors
+            # rather than the raw diff-in-means gives a steering axis whose
+            # scale is consistent across categories with different
+            # uncertain-vs-certain separations. Skip when either category
+            # was unavailable.
             if "abstain" in category_directions and "hedge" in category_directions:
                 cross_raw = category_directions["abstain"] - category_directions["hedge"]
                 cross_norm = cross_raw.norm().item()

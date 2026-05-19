@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from sae_muc.models.sae import assert_sae_layers_available
 from sae_muc.pipeline import diagnostics_datasets as dd
 from sae_muc.pipeline._utils import _resolve_layers
 from sae_muc.pipeline.context import PipelineContext
@@ -164,7 +165,13 @@ def _build_hooks_for(
     return build_per_layer_hooks(
         method=method,
         sae_emd_delta=ctx.cfg.stages.intervene.sae_emd_delta,
-        apply_during_generation=True,  # diagnostics has no decode steps to skip.
+        # Forced True. The teacher-forced scorers (wikitext / MMLU / HellaSwag
+        # likelihood passes, KL) only do prefill — `apply_during_generation`
+        # has no effect on them. `score_gsm8k` does autoregressive decode,
+        # though, so a `False` here would silently measure prefill-only
+        # damage. The paper-faithful default is True; per-variant fidelity
+        # against an `apply_during_generation=False` run isn't supported.
+        apply_during_generation=True,
         layers=layers,
         directions=directions,
         alpha=alpha,
@@ -564,6 +571,14 @@ def run(ctx: PipelineContext) -> list[str]:
     # -------- mode 2: multi-method × alpha sweep ------------------------------
     if do_sweep:
         sweep_layers = _sweep_layers(ctx)
+        # Validate SAE coverage when the sweep will exercise SAE-based methods.
+        # `intervene.run` only validates when its own `method` is SAE — if the
+        # primary run is `linear_vuf` and the sweep adds `sae_emd`/`sae_clamp`
+        # on a sparse release (e.g. mistral-7b-res-wg ⊂ {8,16,24}), without
+        # this we'd KeyError deep inside `_build_hooks_for`.
+        sweep_uses_sae = any(m in _SAE_FEATURE_METHODS for m in cfg.compare_methods)
+        if sweep_uses_sae:
+            assert_sae_layers_available(ctx.cfg.sae, sweep_layers)
         log.info(
             "diagnostics sweep: methods=%s × alphas=%s on layers=%s",
             list(cfg.compare_methods), list(cfg.alpha_sweep), sweep_layers,

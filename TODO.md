@@ -244,31 +244,36 @@ Deferred extensions (отдельной итерацией, по запросу 
 
 ---
 
+## ✅ Per-layer SAE registry (done — commit `ccd4319`)
+
+Multi-layer SAE intervention (paper App E.1: Llama 15-31, Mistral 15-31,
+Qwen 16-27) requires a **separate SAE per residual-stream layer** —
+Gemma-Scope / Llama-Scope train one SAE per layer, and reusing one across
+layers is OOD noise. Closed:
+
+- [x] `SAEConfig` hybrid schema: `sae_id` (legacy single layer) +
+      `sae_id_template` (e.g. `"layer_{layer}/width_16k/canonical"`) +
+      `sae_id_overrides: dict[int, str]` (sparse releases like
+      `mistral-7b-res-wg` covering only {8, 16, 24}). Resolution priority
+      via `models.sae.resolve_sae_id_for_layer`: overrides > template > legacy.
+- [x] `ctx.saes: dict[int, SAEBackend]` built eagerly in
+      `pipeline.context.build_context` over candidate layers [0, 96); sae-lens
+      weights still load lazily on first encode (wrappers are cheap).
+- [x] `intervene._build_per_layer_hooks` and `sae_features.run` take the SAE
+      per layer from `ctx.saes[layer]` (never a global `ctx.sae`).
+- [x] `assert_sae_layers_available(cfg, target_layers)` validator called
+      at the top of `intervene.run` and `sae_features.run` after
+      `_resolve_layers` and before any forward. Also wired into
+      `diagnostics.run` for the in-run sweep when `compare_methods`
+      includes SAE methods.
+- [x] FakeSAE per-layer registry test coverage; `mistral7b_sae_sparse_smoke.yaml`
+      + `gemma2_2b_sae_multilayer_smoke.yaml` validated against the live
+      sae-lens registry. End-to-end CUDA smoke on Mistral sparse — see
+      P5 «Live smoke на Mistral-7B + sparse SAE overrides».
+
+---
+
 ## P3 — paper fidelity (нужно для воспроизведения цифр Tab.1–3)
-
-### Per-layer SAE registry — **HIGH PRIORITY** (блокер multi-layer SAE)
-- [ ] `SAEConfig` хранит одну `(release, sae_id)`, `ctx.sae` — один объект
-      на весь рантайм. SAE-методы (`sae_emd`, `sae_clamp`, `sae_projected`)
-      и стадия `sae_features` на multi-layer (`intervene.layer: list[int]`)
-      сейчас вызывают **тот же `ctx.sae` на всех слоях**, но Gemma-Scope /
-      Llama-Scope SAE — **per-layer** (каждый `layer_X/...` обучен на
-      residual'е именно слоя X). На слоях ≠ trained_layer encode/decode
-      даёт OOD-шум; multi-layer SAE-интервенция paper App E.1
-      (Llama 15-31 / Qwen 16-27) сейчас **невозможна корректно**.
-
-      Нужно:
-      1. Расширить `SAEConfig`: либо `layers: dict[int, {release, sae_id}]`,
-         либо общий `release` + `sae_id_template: "layer_{layer}/width_16k/canonical"`.
-      2. `ctx.saes: dict[int, SAEBackend]` lazy-load по слою (не грузить
-         всё сразу — каждая SAE ~50-200MB).
-      3. Поправить `intervene._build_per_layer_hooks` и `sae_features.run`,
-         чтобы брали `ctx.saes[layer]` вместо `ctx.sae`.
-      4. Validation: каждый `ctx.saes[layer].d_in == d_model` и `layer`
-         совпадает со слоем хука.
-      5. Тесты (FakeSAE per-layer mock на 2-3 слоях).
-
-      Workaround до фикса: SAE-методы на одном слое, multi-layer только
-      `linear_vuf` (см. `configs/experiment/gemma2_2b_multilayer_smoke.yaml`).
 
 ### SAE activation normalization — investigation (может влиять на результаты)
 - [ ] Разобраться, что `cfg.normalize_activations` делает в каждом релизе и
