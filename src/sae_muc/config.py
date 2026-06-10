@@ -115,6 +115,15 @@ class VUFStage(_Frozen):
     vu_uncertain_min: float = 0.9
     vu_certain_max: float = 0.05
     pooling: Literal["last_token_q", "last_token_a", "mean_q", "mean_a"] = "last_token_q"
+    # Universal / OOD VUF (paper App G.1 / Table 5). When non-empty, the
+    # `combine_vuf` stage pools the per-set means saved by these source runs
+    # into one diff-in-means VUF per layer and overwrites this run's
+    # vuf/direction_layer_*.safetensors:
+    #   * three datasets (TriviaQA+NQ-Open+PopQA) → the universal VUF;
+    #   * a single source → OOD reuse (e.g. TriviaQA VUF applied here, Table 5).
+    # Each entry is a run directory path or a run_id under data_root/runs/.
+    # Empty (default) → combine_vuf is a no-op and the single-dataset VUF stands.
+    combine_sources: list[str] = Field(default_factory=list)
     # When True AND `categories.parquet` has labelled question-level rows,
     # `vuf.run` also builds per-category directions (`abstain`, `hedge`)
     # in addition to the aggregated `main` one — supervisor's

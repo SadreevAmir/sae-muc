@@ -220,3 +220,37 @@ def test_vuf_handles_zero_norm_direction(fake_ctx):
     d = fake_ctx.store.load_safetensors("vuf/direction_layer_0.safetensors")["direction"]
     # Zero-norm direction kept as zero (no NaN from division).
     assert torch.allclose(d, torch.zeros_like(d))
+
+
+def test_vuf_means_roundtrip_via_self_combine(fake_ctx):
+    """vuf.run saves per-set means; pooling a single source (itself) via
+    combine_vuf reconstructs the same diff-in-means VUF (App G.1 identity)."""
+    from sae_muc.pipeline import combine_vuf
+
+    _fake_run_with_signal(fake_ctx, n_questions=10, n_layers=2, d_model=4)
+    vuf.run(fake_ctx)
+    assert fake_ctx.store.exists("vuf/means_layer_0.safetensors")
+    original = {
+        layer: fake_ctx.store.load_safetensors(
+            f"vuf/direction_layer_{layer}.safetensors"
+        )["direction"].clone()
+        for layer in range(2)
+    }
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "vuf": fake_ctx.cfg.stages.vuf.model_copy(
+                        update={"combine_sources": [str(fake_ctx.store.run_dir)]}
+                    )
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+    combine_vuf.run(fake_ctx)
+
+    for layer in range(2):
+        d = fake_ctx.store.load_safetensors(f"vuf/direction_layer_{layer}.safetensors")["direction"]
+        assert torch.allclose(d, original[layer], atol=1e-6)

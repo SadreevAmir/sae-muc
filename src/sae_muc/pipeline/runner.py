@@ -11,6 +11,7 @@ from sae_muc.pipeline import (
     accuracy_judge,
     accuracy_judge_post,
     categorize_uncertainty,
+    combine_vuf,
     detect,
     diagnostics,
     evaluate,
@@ -45,6 +46,10 @@ STAGES: dict[str, StageFn] = {
     # the manifest stays consistent across re-runs.
     "categorize_uncertainty": categorize_uncertainty.run,
     "vuf": vuf.run,
+    # Universal / OOD VUF (paper App G.1 / Table 5). No-op unless
+    # cfg.stages.vuf.combine_sources is set; then it pools those source runs'
+    # per-set means into one diff-in-means VUF and overwrites vuf/direction_*.
+    "combine_vuf": combine_vuf.run,
     "sae_features": sae_features.run,
     "detect": detect.run,
     "intervene": intervene.run,

@@ -46,6 +46,10 @@ def _layer_in_path(layer: int) -> str:
     return f"hidden_states/layer_{layer}.safetensors"
 
 
+def _means_out_path(layer: int) -> str:
+    return f"vuf/means_layer_{layer}.safetensors"
+
+
 def _direction_out_path(layer: int, variant: str = "main") -> str:
     """`main` keeps the legacy flat path; per-category gets a variant suffix.
 
@@ -233,6 +237,21 @@ def run(ctx: PipelineContext) -> list[str]:
         main_path = _direction_out_path(layer, "main")
         ctx.store.save_safetensors(main_path, {"direction": main_dir.contiguous()})
         outputs.append(main_path)
+
+        # Sidecar: the two per-set MEAN activations (pre-diff, pre-norm). The
+        # universal-VUF combine stage pools these across datasets weighted by
+        # counts to reconstruct a single diff-in-means over the union of
+        # contrast sets (paper App G.1), without storing every activation.
+        uncertain_mean = torch.stack([pooled(sid) for sid in uncertain_ids]).mean(dim=0)
+        means_path = _means_out_path(layer)
+        ctx.store.save_safetensors(
+            means_path,
+            {
+                "mean_uncertain": uncertain_mean.contiguous(),
+                "mean_certain": certain_mean.contiguous(),
+            },
+        )
+        outputs.append(means_path)
         dir_meta.append(
             {
                 "layer": layer,
