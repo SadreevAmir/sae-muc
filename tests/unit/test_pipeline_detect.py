@@ -201,7 +201,7 @@ def test_detect_lr_hidden_method_adds_hidden_column(fake_ctx):
     metrics = fake_ctx.store.load_json("detection_metrics.json")
     assert metrics["detector_method"] == "lr_hidden"
     assert "hidden" in metrics
-    assert metrics["hidden"]["layer"] == 1
+    assert metrics["hidden"]["layers"] == [1]
     # Default gate_detector_method=auto → for lr_hidden, gate column is hidden.
     assert metrics["gate"]["method"] == "hidden"
 
@@ -267,3 +267,99 @@ def test_detect_seed_makes_split_reproducible(fake_ctx):
     m2 = fake_ctx.store.load_json("detection_metrics.json")
     # Same seed → identical metrics.
     assert m1 == m2
+
+
+# --------- Probe-Predicted + SEP baseline (App F.1 / Table 2) -----------
+
+
+def _seed_multilayer_hidden(fake_ctx, *, n: int, n_hallucinated: int, layers):
+    """Seed vuf/meta + hidden_states across `layers` with a class-separable
+    signal so the App F.1 regressor / SEP probes have something to learn."""
+    layers = list(layers)
+    fake_ctx.store.save_parquet(
+        "vuf/meta.parquet",
+        pd.DataFrame(
+            {
+                "layer": layers,
+                "path": [f"vuf/direction_layer_{l}.safetensors" for l in layers],
+                "raw_norm": [1.0] * len(layers),
+                "n_uncertain": [n_hallucinated] * len(layers),
+                "n_certain": [n - n_hallucinated] * len(layers),
+                "pooling": ["last_token_q"] * len(layers),
+            }
+        ),
+    )
+    fake_ctx.store.save_parquet(
+        "hidden_states/meta.parquet",
+        pd.DataFrame(
+            {
+                "sample_id": [f"q{i}" for i in range(n)],
+                "seq_len": [5] * n,
+                "question_len": [3] * n,
+                "n_layers": [len(layers)] * n,
+                "answer_len": [2] * n,
+            }
+        ),
+    )
+    for layer in layers:
+        tensors = {}
+        for i in range(n):
+            hs = torch.zeros(5, 8)
+            hs[:, 0] = 2.0 if i < n_hallucinated else -2.0
+            tensors[f"q{i}"] = hs
+        fake_ctx.store.save_safetensors(f"hidden_states/layer_{layer}.safetensors", tensors)
+
+
+def _with_detect_cfg(fake_ctx, **detect_updates):
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={"detect": fake_ctx.cfg.stages.detect.model_copy(update=detect_updates)}
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+
+def test_detect_probe_predicted_uses_regressor_features(fake_ctx):
+    # fake_ctx dataset is nq_open -> App F.1 VU/SU ranges are both 10-20.
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    _seed_multilayer_hidden(fake_ctx, n=20, n_hallucinated=10, layers=range(10, 21))
+    _with_detect_cfg(fake_ctx, detector_input="probe_predicted")
+
+    detect.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("detection.parquet")
+    metrics = fake_ctx.store.load_json("detection_metrics.json")
+
+    assert metrics["detector_input"] == "probe_predicted"
+    # Regressor-predicted features exist and the base LRs were fit on them.
+    assert "pred_vu" in df.columns and "pred_se" in df.columns
+    assert df["pred_vu"].notna().all() and df["pred_se"].notna().all()
+    for name in ("verbal", "semantic", "combined"):
+        assert df[f"prob_hallucinate_{name}"].notna().all()
+        # Clean separable hidden signal -> probes recover the classes.
+        assert metrics[name]["test"]["auroc"] >= 0.9
+
+
+def test_detect_sep_baseline_adds_column(fake_ctx):
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    _seed_multilayer_hidden(fake_ctx, n=20, n_hallucinated=10, layers=range(10, 21))
+    _with_detect_cfg(fake_ctx, detector_baselines=["sep"])
+
+    detect.run(fake_ctx)
+    df = fake_ctx.store.load_parquet("detection.parquet")
+    metrics = fake_ctx.store.load_json("detection_metrics.json")
+
+    assert "sep" in metrics
+    assert "auroc" in metrics["sep"]["test"]
+    assert df["prob_hallucinate_sep"].notna().all()
+
+
+def test_detect_probe_predicted_loud_when_range_missing(fake_ctx):
+    # Hidden only seeded for layers 0-3 (App F.1 nq_open range 10-20 absent).
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    _seed_multilayer_hidden(fake_ctx, n=20, n_hallucinated=10, layers=range(0, 4))
+    _with_detect_cfg(fake_ctx, detector_input="probe_predicted")
+
+    with pytest.raises(ValueError, match="App F.1"):
+        detect.run(fake_ctx)

@@ -6,6 +6,7 @@ import pytest
 
 from sae_muc.pipeline.intervene import _resolve_alpha_max
 from sae_muc.pipeline.paper_layer_ranges import paper_layer_range, paper_max_alpha
+from sae_muc.pipeline.probe_layer_ranges import probe_layer_range, probe_layer_union
 
 
 @pytest.mark.parametrize(
@@ -43,3 +44,28 @@ def test_alpha_max_paper_validates_in_config():
 
     assert InterveneStage(alpha_max="paper").alpha_max == "paper"
     assert InterveneStage(alpha_max=0.4).alpha_max == 0.4
+
+
+@pytest.mark.parametrize(
+    ("dataset", "uncertainty", "expected"),
+    [
+        ("triviaqa", "vu", list(range(5, 21))),
+        ("nq_open", "vu", list(range(10, 21))),
+        ("popqa", "vu", list(range(5, 21))),
+        ("triviaqa", "su", list(range(10, 21))),
+        ("nq_open", "su", list(range(10, 21))),
+        ("popqa", "su", list(range(5, 26))),
+    ],
+)
+def test_probe_layer_range_app_f1(dataset, uncertainty, expected):
+    assert probe_layer_range(dataset, uncertainty) == expected
+
+
+def test_probe_layer_union_popqa():
+    # VU 5-20 ∪ SU 5-25 = 5-25.
+    assert probe_layer_union("popqa") == list(range(5, 26))
+
+
+def test_probe_layer_range_unknown_raises():
+    with pytest.raises(ValueError, match="App F.1"):
+        probe_layer_range("squad", "vu")

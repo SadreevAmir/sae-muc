@@ -193,10 +193,24 @@ class DetectStage(_Frozen):
     # In all modes the verbal / semantic / combined LRs are still trained
     # so per-feature comparisons stay available in detection_metrics.json.
     detector_method: Literal["lr_vu_se", "lr_hidden", "combined"] = "lr_vu_se"
-    # Layer for the hidden-state probe. "auto" = middle of the available
-    # VUF layers (independent of stages.intervene.layer so detector and
-    # intervention layers can be tuned separately).
-    detector_layer: int | Literal["auto"] = "auto"
+    # Detector input features (paper §4.1 / Table 2):
+    #   "calculated"      — feed the LR the calculated VU (judge mean) and SU
+    #                       (semantic entropy). Requires full sampling.
+    #   "probe_predicted" — feed the LR the VU/SU PREDICTED by two linear
+    #                       regressor probes over the question's last-token
+    #                       hidden state (App F.1 ranges); no sampling needed at
+    #                       inference. Reproduces Table 2's Probe-Predicted column.
+    detector_input: Literal["calculated", "probe_predicted"] = "calculated"
+    # Layer(s) for the hidden-state classifier probe (lr_hidden / combined):
+    #   int / list[int] — explicit; "auto" — middle of the available VUF layers
+    #   (single layer); "paper_range" — App F.1 per-dataset union of the VU+SU
+    #   probe ranges (probe_layer_ranges.py). Independent of intervene.layer.
+    detector_layer: int | list[int] | Literal["auto", "paper_range"] = "auto"
+    # External Table-2 baselines to additionally fit (paper §4.1 Baselines):
+    #   "sep" — Semantic Entropy Probe: LR over the TBG (last-question-token)
+    #           hidden state predicting binarized SU, abstained→non-hallucinated.
+    # Each needs hidden states; empty by default (no extra cost).
+    detector_baselines: list[Literal["sep"]] = Field(default_factory=list)
 
 
 class SAEFeaturesStage(_Frozen):
