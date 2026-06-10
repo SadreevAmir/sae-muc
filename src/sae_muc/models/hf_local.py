@@ -31,6 +31,20 @@ _DTYPE_MAP: dict[str, str] = {
 }
 
 
+def _add_truncation_kwargs(
+    gen_kwargs: dict, top_p: float | None, top_k: int | None
+) -> None:
+    """Pin nucleus / top-K truncation for sampled decoding (paper App C).
+
+    Only called on the sampling path (do_sample=True). A `None` value defers
+    to the model's bundled generation_config, matching the pre-fix behaviour.
+    """
+    if top_p is not None:
+        gen_kwargs["top_p"] = float(top_p)
+    if top_k is not None:
+        gen_kwargs["top_k"] = int(top_k)
+
+
 class HFLocalBackend:
     def __init__(self, model_name: str, *, dtype: str = "bfloat16") -> None:
         # Lazy load: `__init__` is cheap, the actual model/tokeniser are
@@ -80,6 +94,8 @@ class HFLocalBackend:
         n: int = 1,
         system: str | None = None,
         seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> list[list[Generation]]:
         import torch
 
@@ -102,6 +118,7 @@ class HFLocalBackend:
         }
         if do_sample:
             gen_kwargs["temperature"] = temperature
+            _add_truncation_kwargs(gen_kwargs, top_p, top_k)
 
         # Re-seed torch's global RNG before each sampled .generate() so that
         # the same (cfg.seed, prompt, n) yields the same sample set across
@@ -179,6 +196,8 @@ class HFLocalBackend:
         n: int = 1,
         system: str | None = None,
         seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> list[list[Generation]]:
         """Same as `generate` but with `hook_fn` applied at the residual stream of `hook_layer`.
 
@@ -212,6 +231,7 @@ class HFLocalBackend:
         }
         if do_sample:
             gen_kwargs["temperature"] = temperature
+            _add_truncation_kwargs(gen_kwargs, top_p, top_k)
 
         handles = self._register_residual_hooks(hook_layer, hook_fn)
         try:

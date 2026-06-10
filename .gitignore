@@ -40,3 +40,6 @@ CLAUDE.md
 # write-ups). Anchored to repo root so the name doesn't collide with a
 # nested `docs/` package elsewhere.
 /docs/
+
+# run logs (smoke/sae runs in repo root)
+*.log

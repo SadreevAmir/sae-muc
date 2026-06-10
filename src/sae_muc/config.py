@@ -50,6 +50,15 @@ class GenerateStage(_Frozen):
     temperature_low: float = 0.1
     temperature_high: float = 1.0
     max_new_tokens: int = 100
+    # Nucleus / top-K truncation for sampled decoding (paper App C p.18:
+    # "temperature of 1 with nucleus sampling (P = 0.9) and top-K sampling
+    # (K = 50)"). Pinned here so the high-T sample distribution feeding SE
+    # clustering and the per-question VU mean is model-independent; without
+    # them HF falls back to each model's bundled generation_config. Only
+    # applied when do_sample (temperature > 0); set to None to defer to the
+    # backend/model default.
+    top_p: float | None = 0.9
+    top_k: int | None = 50
 
 
 class HiddenStatesStage(_Frozen):

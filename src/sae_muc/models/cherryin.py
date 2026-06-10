@@ -43,8 +43,13 @@ class CherryInBackend:
         n: int = 1,
         system: str | None = None,
         seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> list[list[Generation]]:
-        _ = seed  # remote API: randomness is server-side, ignore the seed
+        # remote API: randomness is server-side, ignore the seed. top_p/top_k
+        # are paper-pinned for HF-local answer sampling only (judge calls
+        # don't pass them) — accept-and-ignore here.
+        _ = seed, top_p, top_k
         out: list[list[Generation]] = []
         for prompt in prompts:
             messages: list[dict[str, str]] = []

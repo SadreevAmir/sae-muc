@@ -30,6 +30,8 @@ class LLMBackend(Protocol):
         n: int = 1,
         system: str | None = None,
         seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> list[list[Generation]]:
         """Produce n completions per prompt.
 
@@ -40,5 +42,9 @@ class LLMBackend(Protocol):
         `seed` is honoured only by backends whose RNG is reachable from the
         caller (HF local). Remote APIs (OpenRouter/CherryIn) ignore it; their
         randomness lives server-side.
+
+        `top_p` / `top_k` pin nucleus / top-K truncation for sampled decoding
+        (paper App C). They are applied only when sampling and only by the
+        HF-local backend; remote judge backends ignore them.
         """
         ...

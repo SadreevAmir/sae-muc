@@ -47,8 +47,10 @@ class FakeBackend:
         n: int = 1,
         system: str | None = None,
         seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> list[list[Generation]]:
-        _ = max_new_tokens, system, seed  # unused; kept for interface parity
+        _ = max_new_tokens, system, seed, top_p, top_k  # unused; interface parity
         out: list[list[Generation]] = []
         for prompt in prompts:
             per_prompt: list[Generation] = []
@@ -107,13 +109,15 @@ class FakeBackend:
         n: int = 1,
         system: str | None = None,
         seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> list[list[Generation]]:
         """Probe `hook_fn` to derive a perturbation signature, then generate
         with the signature baked into the prompt so different hooks produce
         different outputs. Multi-layer hooks are summed into a single hint.
         No real activations are touched.
         """
-        _ = system, seed
+        _ = system, seed, top_p, top_k
         alpha_hint = self._hook_perturbation_magnitude(hook_layer, hook_fn)
         tagged = [f"[hook:{alpha_hint:+.4f}] {p}" for p in prompts]
         return self.generate(
