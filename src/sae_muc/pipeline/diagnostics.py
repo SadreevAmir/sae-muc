@@ -121,7 +121,9 @@ def _select_kl_prompts(ctx: PipelineContext) -> list[str]:
     n_max = int(ctx.cfg.stages.diagnostics.kl_max_prompts)
     samples = ctx.store.load_parquet("samples.parquet")
     questions = list(samples["question"])[:n_max] if n_max > 0 else list(samples["question"])
-    return [format_answer_prompt(q, eliciting=True) for q in questions]
+    # Neutral prompt: the KL diagnostic measures the steering side-effect on the
+    # distribution the steered MUC generation actually runs on (§2.15 / §4.2).
+    return [format_answer_prompt(q, eliciting=False) for q in questions]
 
 
 def _load_directions(

@@ -30,6 +30,7 @@ import logging
 import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
+from sae_muc.pipeline._utils import PROMPT_ELICITING, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -49,7 +50,12 @@ def run(ctx: PipelineContext) -> list[str]:
 
     samples = ctx.store.load_parquet("samples.parquet")
     gens = ctx.store.load_parquet("generations.parquet")
-    greedy = gens[gens["kind"] == "greedy"].set_index("sample_id")
+    # VUF extraction processes the question under the eliciting prompt (§3.1),
+    # so pair the residual extraction with the eliciting most-likely answer
+    # (only matters for last_token_a / mean_a pooling + full-text storage).
+    greedy = select_prompt_kind(
+        gens[gens["kind"] == "greedy"], PROMPT_ELICITING
+    ).set_index("sample_id")
 
     texts: list[str] = []
     sample_ids: list[str] = []

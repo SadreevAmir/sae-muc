@@ -82,8 +82,12 @@ def test_semantic_entropy_stage_ignores_greedy_rows(fake_ctx):
     se_out = semantic_entropy.run(fake_ctx)
     df = fake_ctx.store.load_parquet(se_out[0])
     gens = fake_ctx.store.load_parquet("generations.parquet")
-    # n_samples recorded per question equals the number of sample-kind rows per question.
-    per_q = gens[gens["kind"] == "sample"].groupby("sample_id").size()
+    from sae_muc.pipeline._utils import PROMPT_PLAIN, select_prompt_kind
+
+    # SE clusters only the plain-prompt samples (paper App C); n_samples per
+    # question equals the number of plain sample-kind rows per question.
+    plain_samples = select_prompt_kind(gens[gens["kind"] == "sample"], PROMPT_PLAIN)
+    per_q = plain_samples.groupby("sample_id").size()
     for sid_, n in per_q.items():
         assert df.loc[df["sample_id"] == sid_, "n_samples"].iloc[0] == n
 

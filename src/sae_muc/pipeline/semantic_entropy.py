@@ -18,6 +18,7 @@ from collections import Counter
 import pandas as pd
 
 from sae_muc.models.nli import NLIBackend
+from sae_muc.pipeline._utils import PROMPT_PLAIN, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,10 @@ def cluster_generations(
     output_name: str,
 ) -> list[str]:
     """Cluster sampled answers in `gens` by bidirectional entailment; save SE."""
-    sampled = gens[gens["kind"] == "sample"]
+    # SE is computed over the *plain*-prompt samples (paper App C: "we input a
+    # question ... and sample 10 sequences"); the hedging prompt is bound to VU
+    # only. select_prompt_kind falls through for eliciting_only / steered sets.
+    sampled = select_prompt_kind(gens[gens["kind"] == "sample"], PROMPT_PLAIN)
     n_questions = sampled["sample_id"].nunique()
     log.info(
         "clustering %d sampled answers across %d questions via NLI (%s) -> %s",

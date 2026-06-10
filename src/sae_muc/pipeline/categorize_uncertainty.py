@@ -38,6 +38,7 @@ from typing import Any
 import pandas as pd
 
 from sae_muc.data.prompts import format_categorize_prompt
+from sae_muc.pipeline._utils import PROMPT_ELICITING, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -135,7 +136,10 @@ def run(ctx: PipelineContext) -> list[str]:
     threshold = float(ctx.cfg.stages.vuf.vu_uncertain_min)
     uncertain_ids = set(vu_per_q.index[vu_per_q >= threshold].tolist())
 
-    candidates = gens[(gens["kind"] == "sample") & (gens["sample_id"].isin(uncertain_ids))]
+    # The uncertain bucket is defined on eliciting-prompt VU, so categorise the
+    # eliciting samples (falls through in eliciting_only mode).
+    sample_gens = select_prompt_kind(gens[gens["kind"] == "sample"], PROMPT_ELICITING)
+    candidates = sample_gens[sample_gens["sample_id"].isin(uncertain_ids)]
     log.info(
         "categorize_uncertainty: %d generations to label (%d uncertain questions × ≤N samples)",
         len(candidates), len(uncertain_ids),

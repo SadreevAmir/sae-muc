@@ -549,8 +549,13 @@ def test_intervene_adaptive_gate_skips_safe_samples(fake_ctx):
     # The reused baseline rows are tagged α=0 too.
     safe_rows = gens[gens["sample_id"].isin(sids[1:])]
     assert (safe_rows["alpha"] == 0.0).all()
-    # Texts for safe samples must equal the baseline generations verbatim.
-    baseline = fake_ctx.store.load_parquet("generations.parquet")
+    # Texts for safe samples must equal the plain baseline generations verbatim
+    # (the steered generation is plain, so the gate reuses the plain rows).
+    from sae_muc.pipeline._utils import PROMPT_PLAIN, select_prompt_kind
+
+    baseline = select_prompt_kind(
+        fake_ctx.store.load_parquet("generations.parquet"), PROMPT_PLAIN
+    )
     for sid in sids[1:]:
         b = baseline[baseline["sample_id"] == sid].sort_values(["kind", "gen_idx"])
         g = safe_rows[safe_rows["sample_id"] == sid].sort_values(["kind", "gen_idx"])

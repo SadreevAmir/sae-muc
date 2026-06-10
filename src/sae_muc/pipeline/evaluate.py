@@ -33,6 +33,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from sae_muc.pipeline._utils import PROMPT_PLAIN, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -65,13 +66,18 @@ def build_frame_from_paths(
 ) -> pd.DataFrame:
     """Join the per-variant artefacts into the per-question frame metrics consume."""
     gens = ctx.store.load_parquet(generations_path)
-    greedy = gens[gens["kind"] == "greedy"].set_index("sample_id")
+    # Plain most-likely answer for the rate metrics (paper App C / §2.3); the
+    # eliciting samples drive VU(x). Falls through on the single-set post gens.
+    greedy = select_prompt_kind(
+        gens[gens["kind"] == "greedy"], PROMPT_PLAIN
+    ).set_index("sample_id")
     accuracy = ctx.store.load_parquet(accuracy_path).set_index("sample_id")
     judge = ctx.store.load_parquet(judge_path)
     se = ctx.store.load_parquet(se_path).set_index("sample_id")
     vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
     vu_greedy_per_q = (
-        judge[judge["kind"] == "greedy"].set_index("sample_id")["vu_score"]
+        select_prompt_kind(judge[judge["kind"] == "greedy"], PROMPT_PLAIN)
+        .set_index("sample_id")["vu_score"]
     )
     refusal_threshold = float(ctx.cfg.stages.detect.refusal_vu_threshold)
 

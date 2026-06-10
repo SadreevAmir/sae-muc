@@ -50,6 +50,15 @@ class GenerateStage(_Frozen):
     temperature_low: float = 0.1
     temperature_high: float = 1.0
     max_new_tokens: int = 100
+    # Which Appendix-A.1 prompt(s) to generate answers with:
+    #   "split" (default, paper-faithful) — generate BOTH a plain set
+    #       (App A.1 box 1 → Semantic Entropy + accuracy + most-likely) and
+    #       an eliciting/hedging set (App A.1 box 2 → VU / VUF, §3.1).
+    #       App C feeds the *plain* question to the SE samples; the hedging
+    #       prompt is bound to VU only. Doubles generation cost.
+    #   "eliciting_only" — generate only the eliciting set and reuse it for
+    #       everything (cheaper; the pre-split behaviour, for smokes).
+    prompt_regime: Literal["split", "eliciting_only"] = "split"
     # Nucleus / top-K truncation for sampled decoding (paper App C p.18:
     # "temperature of 1 with nucleus sampling (P = 0.9) and top-K sampling
     # (K = 50)"). Pinned here so the high-T sample distribution feeding SE

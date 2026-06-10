@@ -14,6 +14,7 @@ import re
 import pandas as pd
 
 from sae_muc.data.prompts import format_vu_judge_prompt
+from sae_muc.pipeline._utils import select_vu_judge_rows
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -84,16 +85,17 @@ def score_generations(
             d = None
             errored += 1
 
-        rows.append(
-            {
-                "sample_id": gen_row["sample_id"],
-                "kind": gen_row["kind"],
-                "gen_idx": int(gen_row["gen_idx"]),
-                "decisiveness": d,
-                "vu_score": (1.0 - d) if d is not None else None,
-                "raw": text,
-            }
-        )
+        row = {
+            "sample_id": gen_row["sample_id"],
+            "kind": gen_row["kind"],
+            "gen_idx": int(gen_row["gen_idx"]),
+            "decisiveness": d,
+            "vu_score": (1.0 - d) if d is not None else None,
+            "raw": text,
+        }
+        if "prompt_kind" in gens.columns:
+            row["prompt_kind"] = gen_row.get("prompt_kind")
+        rows.append(row)
         if (i + 1) % progress_every == 0 and (i + 1) < total:
             log.info("  progress: %d/%d (%d%%)", i + 1, total, (i + 1) * 100 // total)
 
@@ -108,4 +110,7 @@ def score_generations(
 
 def run(ctx: PipelineContext) -> list[str]:
     gens = ctx.store.load_parquet("generations.parquet")
-    return score_generations(ctx, gens, OUTPUT)
+    # VU is measured on the eliciting samples + the plain most-likely answer
+    # (paper §2.2/§2.3/§3.1); skip the plain samples / eliciting greedy that no
+    # downstream consumer needs. eliciting_only runs judge the whole frame.
+    return score_generations(ctx, select_vu_judge_rows(gens), OUTPUT)

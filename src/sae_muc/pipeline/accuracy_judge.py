@@ -15,6 +15,7 @@ import re
 import pandas as pd
 
 from sae_muc.data.prompts import format_accuracy_judge_prompt
+from sae_muc.pipeline._utils import PROMPT_PLAIN, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -54,7 +55,10 @@ def score_generations(
 ) -> list[str]:
     """Ask the accuracy judge about the greedy rows in `gens`; save to `output_name`."""
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
-    greedy = gens[gens["kind"] == "greedy"]
+    # Accuracy is judged on the plain most-likely answer (paper App C / A.3:
+    # the single low-T sequence off the plain question). Falls through to the
+    # only greedy in eliciting_only / steered sets.
+    greedy = select_prompt_kind(gens[gens["kind"] == "greedy"], PROMPT_PLAIN)
     total = len(greedy)
     log.info(
         "checking accuracy of %d greedy answers via %s -> %s",

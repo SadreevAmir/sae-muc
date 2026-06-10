@@ -43,7 +43,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from sae_muc.pipeline._utils import _pool, _resolve_layers
+from sae_muc.pipeline._utils import (
+    PROMPT_PLAIN,
+    _pool,
+    _resolve_layers,
+    select_prompt_kind,
+)
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -70,14 +75,19 @@ def _score(y_true: np.ndarray, y_prob: np.ndarray, y_pred: np.ndarray) -> dict[s
 
 def _build_feature_frame(ctx: PipelineContext) -> pd.DataFrame:
     gens = ctx.store.load_parquet("generations.parquet")
-    greedy = gens[gens["kind"] == "greedy"].set_index("sample_id")
+    # The most-likely answer (accuracy + abstention signal) is the plain greedy
+    # (paper App C / §2.3); VU(x) averages the eliciting samples (§2.2).
+    greedy = select_prompt_kind(
+        gens[gens["kind"] == "greedy"], PROMPT_PLAIN
+    ).set_index("sample_id")
     accuracy = ctx.store.load_parquet("accuracy.parquet").set_index("sample_id")
     judge = ctx.store.load_parquet("judge_scores.parquet")
     se = ctx.store.load_parquet("semantic_entropy.parquet").set_index("sample_id")
 
     vu_per_q = judge[judge["kind"] == "sample"].groupby("sample_id")["vu_score"].mean()
     vu_greedy_per_q = (
-        judge[judge["kind"] == "greedy"].set_index("sample_id")["vu_score"]
+        select_prompt_kind(judge[judge["kind"] == "greedy"], PROMPT_PLAIN)
+        .set_index("sample_id")["vu_score"]
     )
     refusal_threshold = float(ctx.cfg.stages.detect.refusal_vu_threshold)
 

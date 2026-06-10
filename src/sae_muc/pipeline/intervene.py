@@ -40,7 +40,7 @@ import pandas as pd
 
 from sae_muc.data.prompts import format_answer_prompt
 from sae_muc.models.sae import assert_sae_layers_available
-from sae_muc.pipeline._utils import _resolve_layers
+from sae_muc.pipeline._utils import PROMPT_PLAIN, _resolve_layers, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 _SAE_METHODS = ("sae_emd", "sae_clamp", "sae_projected")
@@ -518,7 +518,11 @@ def _run_adaptive(
             "on the rest, baseline reused)",
             int(gate_mask.sum()), len(alphas_df),
         )
-        baseline = ctx.store.load_parquet("generations.parquet")
+        # Reuse the plain baseline for gated-out (safe) samples — the steered
+        # generation is plain, so copy the matching plain rows (App C / §2.15).
+        baseline = select_prompt_kind(
+            ctx.store.load_parquet("generations.parquet"), PROMPT_PLAIN
+        )
     else:
         at_risk = None
         baseline = None
@@ -620,7 +624,11 @@ def run(ctx: PipelineContext) -> list[str]:
 
     samples = ctx.store.load_parquet("samples.parquet")
     sample_ids = list(samples["sample_id"])
-    prompts = [format_answer_prompt(q, eliciting=True) for q in samples["question"]]
+    # Steered MUC generation uses the NEUTRAL prompt: §4.2 states MUC needs no
+    # "additional system prompt design" — uncertainty is injected mechanically
+    # via the VUF, so re-using the hedging/eliciting prompt would double-count
+    # (told-to-hedge AND VUF-pushed) and confound the causal attribution (§2.15).
+    prompts = [format_answer_prompt(q, eliciting=False) for q in samples["question"]]
 
     if cfg.gate_by_detector and cfg.mode != "adaptive":
         log.warning(

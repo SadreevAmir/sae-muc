@@ -45,8 +45,12 @@ def test_judge_writes_parquet_with_scores(fake_ctx, monkeypatch):
 
     df = fake_ctx.store.load_parquet("judge_scores.parquet")
     gens = fake_ctx.store.load_parquet("generations.parquet")
-    # Every generation gets scored.
-    assert len(df) == len(gens)
+    # VU is scored on the eliciting samples + the plain most-likely answer only
+    # (paper §2.2/§2.3), not the plain samples / eliciting greedy.
+    from sae_muc.pipeline._utils import select_vu_judge_rows
+
+    assert len(df) == len(select_vu_judge_rows(gens))
+    assert set(df["prompt_kind"].dropna().unique()) <= {"plain", "eliciting"}
     assert (df["decisiveness"] == 0.7).all()
     # vu = 1 - decisiveness; tolerate float formatting.
     assert all(abs(v - 0.3) < 1e-9 for v in df["vu_score"])
