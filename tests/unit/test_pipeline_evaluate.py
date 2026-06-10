@@ -216,3 +216,17 @@ def test_evaluate_stage_writes_metrics_json(fake_ctx):
     # VU means
     assert m["vu_correct_mean"] == pytest.approx((0.9 + 0.8) / 2)
     assert m["vu_incorrect_mean"] == pytest.approx((0.2 + 0.3 + 0.2) / 3)
+
+
+def test_evaluate_abstention_categorization_diagnostic(fake_ctx):
+    _seed_evaluate_artefacts(fake_ctx)
+    evaluate.run(fake_ctx)
+    m = fake_ctx.store.load_json("metrics.json")
+    cats = m["abstention_categories"]["counts"]
+    # q4 is the refusal; its 3 samples all have VU 0.9 ≥ 0.85 → consistently.
+    assert cats["consistently_abstained"] == 1
+    assert cats["partly_abstained"] == 0
+    # Complying split: q0,q1 correct; q2,q3,q5 hallucinated.
+    assert cats["complying_correct"] == 2
+    assert cats["complying_hallucinated"] == 3
+    assert m["abstention_categories"]["n"] == 6

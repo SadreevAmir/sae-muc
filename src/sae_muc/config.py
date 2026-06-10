@@ -184,14 +184,16 @@ class InterveneStage(_Frozen):
 
 class DetectStage(_Frozen):
     # Refusal is classified from the judge's VU on the greedy answer
-    # (paper §3.2: "we categorize the samples ... based on the VU level
+    # (paper §2.3 p.4: "we categorize the samples ... based on the VU level
     # of the most likely answer"). A greedy answer with VU ≥ threshold is
     # considered a refusal/abstention and excluded from hallucination
     # training.
     #
-    # Paper note: §3.2 introduces the categorisation but does not pin down
-    # a specific cut-off value. 0.85 is OUR calibration default — Tab.3-style
-    # numbers under this threshold are not directly comparable to the paper.
+    # Paper note: §2.3 defines abstention BEHAVIOURALLY (an abstained answer
+    # punts → decisiveness 0 → VU 1) and pins NO numeric VU cut-off. 0.85 is
+    # OUR calibration default — Tab.3-style numbers under it are not directly
+    # comparable to the paper. The behavioural consistently/partly-abstained
+    # split (Table 6) is reproduced as a diagnostic in evaluate.py.
     # Override per experiment via YAML (`stages.detect.refusal_vu_threshold`).
     refusal_vu_threshold: float = 0.85
     # Hallucination-detector model (paper §4.1):

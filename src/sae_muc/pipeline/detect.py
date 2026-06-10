@@ -13,10 +13,11 @@ For each question we compute:
   - vu_greedy = judge VU on the greedy answer
   - se        = semantic entropy of the N samples
   - is_refusal       = vu_greedy ≥ cfg.stages.detect.refusal_vu_threshold
-                       (paper §3.2: refusal classification is derived from the
-                       judge's own VU score, not a regex list. The threshold
-                       value itself — default 0.85 — is OUR calibration: the
-                       paper does not pin a specific cut-off.)
+                       (paper §2.3: refusal classification is derived from the
+                       judge's own VU on the most-likely answer, not a regex
+                       list. The threshold value itself — default 0.85 — is OUR
+                       calibration: §2.3 defines abstention behaviourally and
+                       pins no specific cut-off.)
   - is_hallucinated  = (not is_correct) AND (not is_refusal)
 
 The trainable set drops refusals and any sample with a missing label. We
@@ -37,6 +38,13 @@ features (paper §4.1 / Table 2):
 baselines (each needs hidden states):
   * sep — Semantic Entropy Probe: an LR over the TBG (last-question-token)
           hidden state predicting binarized SU, abstained→non-hallucinated.
+
+EigenScore (Table-2's other baseline) is DEFERRED, not implemented: the paper
+cites it but gives no formula — it is the INSIDE method (Chen et al. 2024). It
+needs the covariance of the K *sampled-answer* embeddings, which this pipeline
+does not store (hidden_states forwards the question, not each sampled answer),
+so it would require a fresh forward pass over generations.parquet's sample
+texts. Addable any time without data loss; out of scope here, see TODO.md.
 
 Metrics (AUROC, ACC) are reported on both train and test splits.
 Predictions for every sample (including refusals) and the bool column

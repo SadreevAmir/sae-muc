@@ -191,6 +191,56 @@ def _build_frame(ctx: PipelineContext) -> pd.DataFrame:
     )
 
 
+def _abstention_categories(
+    ctx: PipelineContext, df: pd.DataFrame, refusal_threshold: float
+) -> dict:
+    """Behavioural abstained/complying categorization (paper §2.3 / Table 6).
+
+    §2.3: abstained-vs-complying is keyed on the most-likely answer; an
+    abstained question is "consistently abstained" if ALL sampled answers
+    abstain, else "partly abstained" (complies at least once). Complying
+    questions split correct vs hallucinated. Per-sample abstention reuses the
+    same VU ≥ refusal_vu_threshold cut (OUR calibration — the paper pins no
+    number). Diagnostic only: it does not feed the Table-3 rate metrics.
+    """
+    judge = ctx.store.load_parquet("judge_scores.parquet")
+    samples = judge[judge["kind"] == "sample"]
+    n_samples = samples.groupby("sample_id")["vu_score"].size()
+    n_abstain = (
+        samples.assign(_ab=samples["vu_score"] >= refusal_threshold)
+        .groupby("sample_id")["_ab"]
+        .sum()
+    )
+    counts = {
+        "consistently_abstained": 0,
+        "partly_abstained": 0,
+        "complying_correct": 0,
+        "complying_hallucinated": 0,
+        "complying_unlabelled": 0,
+    }
+    for _, row in df.iterrows():
+        sid = row["sample_id"]
+        if bool(row["is_refusal"]):
+            ns = int(n_samples.get(sid, 0))
+            na = int(n_abstain.get(sid, 0))
+            key = "consistently_abstained" if ns > 0 and na == ns else "partly_abstained"
+            counts[key] += 1
+        elif row["is_correct"] is True:
+            counts["complying_correct"] += 1
+        elif row["is_correct"] is False:
+            counts["complying_hallucinated"] += 1
+        else:
+            counts["complying_unlabelled"] += 1
+    total = sum(counts.values())
+    proportions = {k: (v / total if total else float("nan")) for k, v in counts.items()}
+    return {
+        "counts": counts,
+        "proportions": proportions,
+        "n": total,
+        "refusal_vu_threshold": refusal_threshold,
+    }
+
+
 def run(ctx: PipelineContext) -> list[str]:
     df = _build_frame(ctx)
     log.info(
@@ -212,5 +262,8 @@ def run(ctx: PipelineContext) -> list[str]:
         eval_cfg.vu_threshold_mode, vu_t, eval_cfg.su_threshold_mode, su_t,
     )
     metrics = _compute_metrics(df, vu_threshold=vu_t, su_threshold=su_t)
+    metrics["abstention_categories"] = _abstention_categories(
+        ctx, df, float(ctx.cfg.stages.detect.refusal_vu_threshold)
+    )
     ctx.store.save_json(OUTPUT, metrics)
     return [OUTPUT]

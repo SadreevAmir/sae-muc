@@ -324,12 +324,12 @@ layers is OOD noise. Closed:
       **Без этого Tab.1/Tab.3 не воспроизводимы.**
 
 ### VUF layer auto-selection (paper Fig.4) — **review-flagged P4**
-- [ ] Считать cosine-similarity VUF'ов между датасетами и выбирать слой
-      с максимальной согласованностью. Сейчас либо все слои
-      (`layers: auto`), либо ручное указание в конфиге, либо
-      `paper_range` по App E.1. После C2 multi-layer auto должен
-      возвращать paper-диапазон / cross-dataset-stable layer set,
-      а не середину диапазона.
+- [~] Cross-dataset cosine-similarity VUF'ов теперь считается:
+      `combine_vuf` пишет `vuf/cross_dataset_cosine.parquet` (per-layer mean
+      pairwise cosine источников) — количественная половина §3.2. Осталось:
+      авто-выбор слоёв ПО этому сигналу (сейчас читается глазами; band берётся
+      из `paper_range`/App E.1). PCA-separability — качественная визуализация
+      в статье, не алгоритм.
 
 ### popqa loader — проверка на живом датасете (review-flagged P5)
 - [ ] `_load_popqa` в `data/loaders.py:102-122` использует
@@ -341,15 +341,21 @@ layers is OOD noise. Closed:
       Если поля другие — обновить `_load_popqa`.
 
 ### Hedging prompt vs accuracy judge (review-flagged P6) — **paper-scale важно**
-- [ ] `generate.py:27` и `hidden_states.py:48` используют
-      `eliciting=True` prompt («precisely hedging»). Это правильно для
-      VU-измерения (App A.1). Но `accuracy_judge` потом сравнивает
-      hedged-ответ с golden как «семантически эквивалентен»; если
-      модель оборачивает корректный ответ в «I'm not sure, but…», LLM-as-judge
-      может его отвергать. На paper-scale эффект может смазать
-      `correct_rate`. Идея: подать в `accuracy_judge` голую модель без
-      hedging-prompt, либо явно сказать судье принимать hedged-форму.
-      Замерять delta до/после на 50 sample subset.
+- [x] РЕШЕНО через `generate.prompt_regime="split"` (default): plain-промпт
+      (App A.1 box 1) генерирует ответы для SU/accuracy/most-likely, eliciting
+      (box 2) — только для VU/VUF. `accuracy_judge` / `semantic_entropy` теперь
+      читают plain-set, `hidden_states` остаётся на eliciting (§3.1). Steered
+      MUC-генерация — нейтральный промпт (§2.15). `eliciting_only` оставлен для
+      дешёвых smoke-прогонов. См. `_utils.select_prompt_kind`.
+
+### EigenScore baseline (Table 2) — **DEFERRED, внешний**
+- [ ] Статья цитирует EigenScore как бейзлайн Table 2, но формулы не даёт —
+      это INSIDE (Chen et al. 2024, ICLR). Считается по ковариации эмбеддингов
+      K *сэмплированных ответов* (EigenScore = (1/K)·logdet(Σ+αI)), а пайплайн
+      хранит hidden только для вопроса (+greedy), не для 10 сэмплов. Нужен
+      отдельный forward-проход по текстам сэмплов из `generations.parquet` —
+      добавляется в любой момент без потери данных. На предлагаемый детектор
+      не влияет; SEP (paper-описанный) реализован, EigenScore — нет.
 
 ---
 
