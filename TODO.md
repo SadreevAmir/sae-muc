@@ -1,6 +1,17 @@
 # TODO
 
 
+## ⬜ Multi-GPU (deferred — single-card assumption baked in)
+
+- [ ] `models/hf_local.py` pins the model to `cuda:0` (single visible card via
+      Docker `--gpus device=N`), NOT `device_map="auto"`. To run a model sharded
+      across several cards: (1) revert to `device_map="auto"`, (2) make SAE
+      (`models/sae.py`) and NLI (`models/nli.py`) placement device-aware — they
+      hardcode `.cuda()` == cuda:0, which would force cross-device hops in the
+      intervene hook, (3) drop the single-card `--gpus device=N` restriction in
+      `scripts/docker/run.sh` / `shell.sh`.
+
+
 ## ✅ P1 — done
 
 ### Post-intervention metrics (paper Tab.3 "after")

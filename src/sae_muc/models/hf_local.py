@@ -64,7 +64,6 @@ class HFLocalBackend:
 
         torch_dtype = getattr(torch, _DTYPE_MAP[self._dtype])
         has_cuda = torch.cuda.is_available()
-        device_map = "auto" if has_cuda else None
         log.info("Loading %s (dtype=%s, cuda=%s)", self.name, self._dtype, has_cuda)
 
         tokenizer = AutoTokenizer.from_pretrained(self.name)
@@ -73,8 +72,17 @@ class HFLocalBackend:
         model = AutoModelForCausalLM.from_pretrained(
             self.name,
             torch_dtype=torch_dtype,
-            device_map=device_map,
         )
+        # SINGLE-CARD ASSUMPTION: pin the whole model to cuda:0 rather than
+        # device_map="auto". Server runs expose exactly one GPU via Docker
+        # --gpus device=N (scripts/docker/run.sh), so cuda:0 IS that card; SAE
+        # (models/sae.py) and NLI (models/nli.py) also use .cuda() == cuda:0, so
+        # everything stays co-resident and the intervene hook does no cross-device
+        # hops. To shard a large model across MULTIPLE cards, revert to
+        # device_map="auto" and make SAE/NLI placement device-aware — see TODO.md
+        # "Multi-GPU".
+        if has_cuda:
+            model = model.to("cuda:0")
         model.eval()
 
         self._tokenizer = tokenizer
