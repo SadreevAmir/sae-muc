@@ -42,6 +42,7 @@ from sae_muc.data.prompts import format_answer_prompt
 from sae_muc.models.sae import assert_sae_layers_available
 from sae_muc.pipeline._utils import PROMPT_PLAIN, _resolve_layers, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
+from sae_muc.pipeline.paper_layer_ranges import paper_max_alpha
 
 _SAE_METHODS = ("sae_emd", "sae_clamp", "sae_projected")
 
@@ -365,6 +366,13 @@ def _log_sae_feature_summary(ctx: PipelineContext, layers: list[int]) -> None:
         )
 
 
+def _resolve_alpha_max(alpha_max_cfg: float | str, model_name: str) -> float:
+    """Resolve cfg.stages.intervene.alpha_max ("paper" → per-model App G.1)."""
+    if alpha_max_cfg == "paper":
+        return paper_max_alpha(model_name)
+    return float(alpha_max_cfg)
+
+
 def _compute_adaptive_alphas(
     ctx: PipelineContext,
     sample_ids: list[str],
@@ -505,7 +513,8 @@ def _run_adaptive(
     cfg = ctx.cfg.stages.intervene
     gen_cfg = ctx.cfg.stages.generate
 
-    alphas_df = _compute_adaptive_alphas(ctx, sample_ids, cfg.alpha_max)
+    alpha_max = _resolve_alpha_max(cfg.alpha_max, ctx.cfg.model.name)
+    alphas_df = _compute_adaptive_alphas(ctx, sample_ids, alpha_max)
 
     if cfg.gate_by_detector:
         at_risk = _load_at_risk_set(ctx)
@@ -570,7 +579,7 @@ def _run_adaptive(
                 "mean_alpha": float(alphas_df["alpha"].mean()),
                 "min_alpha": float(alphas_df["alpha"].min()),
                 "max_alpha": float(alphas_df["alpha"].max()),
-                "alpha_max": float(cfg.alpha_max),
+                "alpha_max": float(alpha_max),
             }
         ]
     )
@@ -642,7 +651,8 @@ def run(ctx: PipelineContext) -> list[str]:
     if cfg.mode == "adaptive":
         log.info(
             "mode=adaptive, method=%s, layers=%s, α_max=%.2f (per-question α via Eq.6)",
-            cfg.method, layers_label, cfg.alpha_max,
+            cfg.method, layers_label,
+            _resolve_alpha_max(cfg.alpha_max, ctx.cfg.model.name),
         )
         return _run_adaptive(ctx, prompts, sample_ids, directions, target_layers)
     log.info(

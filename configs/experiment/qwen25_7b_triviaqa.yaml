@@ -1,5 +1,15 @@
 # Paper-scale run: Qwen2.5-7B × TriviaQA × Llama-3.1-70B judge.
 # Use on the server with CUDA; n_samples=1000 matches paper eval set size.
+#
+# NOTE — paper-faithful overrides for a true Table-3 reproduction (the values
+# below are kept at the conservative committed defaults on purpose; flip them
+# per the paper when you actually reproduce, see docs/comparison/COMPARISON.md):
+#   stages.generate.prompt_regime: split   # plain SU/accuracy + eliciting VU (default)
+#   stages.vuf.selection:          top_n    # §3.1 extraction rule (default is vu_threshold = App G.1)
+#   stages.intervene.alpha_max:    paper    # App G.1 Qwen2.5-7B = 3.0 (committed 1.0 under-steers 3×)
+#   stages.intervene.layer:        paper_range   # App E.1 Qwen 16-27 (committed 'auto' = single middle layer)
+# The universal-VUF (combine across TriviaQA+NQ-Open+PopQA, App G.1) is built by
+# the `combine_vuf` stage from three per-dataset runs — see its docstring.
 
 extends: ../base.yaml
 

@@ -130,7 +130,13 @@ class InterveneStage(_Frozen):
     #           paper §4.2 Eq.5–6; this is the MUC intervention proper.
     mode: Literal["fixed", "adaptive"] = "fixed"
     alpha_grid: list[float] = Field(default_factory=lambda: [-1.0, -0.5, 0.0, 0.5, 1.0])
-    alpha_max: float = 1.0
+    # Adaptive (MUC) steering ceiling for Eq.6 clip(su_norm − vu, 0, alpha_max).
+    #   float    — explicit cap (default 1.0).
+    #   "paper"  — per-model App G.1 value via paper_max_alpha(): Llama-3.1-8B
+    #              1.0, Mistral-7B 0.4, Qwen2.5-7B 3.0, Llama-3.1-70B 4.0.
+    # The 1.0 default matches Llama-8B by coincidence; Qwen/Mistral runs must
+    # set "paper" (or the right float) — a global 1.0 under-steers Qwen 3×.
+    alpha_max: float | Literal["paper"] = 1.0
     # Layer(s) where the hook is registered. The paper applies the linear VUF
     # to a contiguous range of layers (App E.1, Tab.5):
     #   "paper_range" — per-model App E.1 range (Llama 15-31, Mistral 15-31,
