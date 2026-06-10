@@ -135,12 +135,12 @@ class VUFStage(_Frozen):
 class InterveneStage(_Frozen):
     method: Literal["linear_vuf", "sae_emd", "sae_projected", "sae_clamp"] = "linear_vuf"
     # fixed: iterate alpha_grid, same α for every question (paper Fig.5/6 ablation).
-    # adaptive: per-question α_su(x) = clip(SU_norm(x) − VU(x), 0, alpha_max),
+    # adaptive: per-question α_su(x) = clip((SU_norm(x) − VU(x))·alpha_max, 0, alpha_max),
     #           paper §4.2 Eq.5–6; this is the MUC intervention proper.
     mode: Literal["fixed", "adaptive"] = "fixed"
     alpha_grid: list[float] = Field(default_factory=lambda: [-1.0, -0.5, 0.0, 0.5, 1.0])
-    # Adaptive (MUC) steering ceiling for Eq.6 clip(su_norm − vu, 0, alpha_max).
-    #   float    — explicit cap (default 1.0).
+    # Adaptive (MUC) steering gain for Eq.6 clip((su_norm − vu)·alpha_max, 0, alpha_max).
+    #   float    — explicit gain (default 1.0).
     #   "paper"  — per-model App G.1 value via paper_max_alpha(): Llama-3.1-8B
     #              1.0, Mistral-7B 0.4, Qwen2.5-7B 3.0, Llama-3.1-70B 4.0.
     # The 1.0 default matches Llama-8B by coincidence; Qwen/Mistral runs must

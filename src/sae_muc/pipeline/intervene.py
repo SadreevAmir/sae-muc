@@ -10,7 +10,7 @@ Two modes (selected via `cfg.stages.intervene.mode`):
   Fig.5/6 ablation sweep.
 
 * **adaptive** (Mechanistic Uncertainty Calibration, paper §4.2):
-  per-question α_su(x) = clip(SU_norm(x) − VU(x), 0, α_max)
+  per-question α_su(x) = clip((SU_norm(x) − VU(x))·α_max, 0, α_max)
   where SU_norm = SE / ln(N) (paper App G.1; N is the number of sampled
   answers used to estimate SE) and VU is the mean judge VU over those
   N sampled answers. We loop prompts one at a time, build a constant-α
@@ -407,7 +407,12 @@ def _compute_adaptive_alphas(
     sample_ids: list[str],
     alpha_max: float,
 ) -> pd.DataFrame:
-    """Per-question α via Eq.6: α = clip(SU_norm(x) − VU(x), 0, α_max).
+    """Per-question α via Eq.6: α = clip((SU_norm(x) − VU(x))·α_max, 0, α_max).
+
+    α_max is a multiplicative GAIN, not a clip ceiling: the gap is scaled by
+    α_max first, then clipped to [0, α_max]. Source of truth for this form is
+    the official author code (facebookresearch/verbal_uncertainty_feature_
+    calibration, calibration/semantic_control.py).
 
     SU_norm = SE / ln(N) per paper App G.1 (N = number of sampled answers
     used to estimate SE). N is read per-row from `semantic_entropy.parquet`
@@ -430,7 +435,7 @@ def _compute_adaptive_alphas(
     log_n = np.where(n_samples > 1, np.log(np.maximum(n_samples, 2)), 0.0)
     su_norm = np.where(log_n > 0, su / log_n, 0.0)
 
-    alpha = np.clip(su_norm - vu, 0.0, float(alpha_max))
+    alpha = np.clip((su_norm - vu) * float(alpha_max), 0.0, float(alpha_max))
     return pd.DataFrame(
         {
             "sample_id": sample_ids,

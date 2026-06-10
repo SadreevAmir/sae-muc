@@ -385,7 +385,8 @@ def test_intervene_sae_projected_runs_end_to_end(fake_ctx):
 
 
 def test_adaptive_alpha_math():
-    """α(x) = clip(SU/ln(N) − VU, 0, α_max). Paper App G.1 normalisation."""
+    """α(x) = clip((SU/ln(N) − VU)·α_max, 0, α_max). Paper App G.1 norm.;
+    α_max is a multiplicative gain (official semantic_control.py), not a ceiling."""
     import math
 
     import pandas as pd
@@ -426,7 +427,7 @@ def test_adaptive_alpha_math():
     # vu = [0.0, 0.5, 1.0]; diff with su_norm = [0, 0, 0]; clipped to 0.
     assert list(df["alpha"]) == pytest.approx([0.0, 0.0, 0.0])
 
-    # Second case: vu = 0 across the board — α tracks su_norm, capped at α_max.
+    # Second case: vu = 0 across the board — α = su_norm·α_max (gain, not capped).
     judge_rows_low_vu = [
         {"sample_id": sid, "kind": "sample", "gen_idx": 0, "vu_score": 0.0}
         for sid in ("a", "b", "c")
@@ -436,8 +437,15 @@ def test_adaptive_alpha_math():
         "semantic_entropy.parquet": pd.DataFrame(se_rows),
     })
     df2 = _compute_adaptive_alphas(ctx2, ["a", "b", "c"], alpha_max=0.5)
-    # su_norm = [0, 0.5, 1.0]; clip(_, 0, 0.5) → [0, 0.5, 0.5].
-    assert list(df2["alpha"]) == pytest.approx([0.0, 0.5, 0.5])
+    # su_norm = [0, 0.5, 1.0]; gap·α_max = [0, 0.25, 0.5]; clip(_, 0, 0.5) →
+    # [0, 0.25, 0.5]. The gap of 0.5 yields α=0.25, NOT 0.5 — α_max is a gain.
+    assert list(df2["alpha"]) == pytest.approx([0.0, 0.25, 0.5])
+
+    # Third case: pin the gain semantics with α_max=0.4 (Mistral). A gap of 0.5
+    # gives α=0.2 (=0.5·0.4), NOT 0.4 — proving α_max scales, not just clips.
+    df3 = _compute_adaptive_alphas(ctx2, ["b"], alpha_max=0.4)
+    assert df3["su_norm"].iloc[0] == pytest.approx(0.5)
+    assert df3["alpha"].iloc[0] == pytest.approx(0.2)
 
 
 def test_adaptive_alpha_no_min_max_normalisation():
