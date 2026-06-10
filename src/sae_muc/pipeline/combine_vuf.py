@@ -89,6 +89,18 @@ def run(ctx: PipelineContext) -> list[str]:
 
     stores = [ArtifactStore(_resolve_source_dir(ctx, s)) for s in sources]
     metas = [st.load_parquet("vuf/meta.parquet") for st in stores]
+
+    # Pooling must be consistent across sources (and with this run) — pooling
+    # means extracted under different token positions would yield a meaningless
+    # mixed direction. Fail loud rather than silently combine apples and oranges.
+    poolings = {str(m["pooling"].iloc[0]) for m in metas if len(m)}
+    poolings.add(ctx.cfg.stages.vuf.pooling)
+    if len(poolings) > 1:
+        raise ValueError(
+            f"combine_vuf: sources disagree on pooling ({sorted(poolings)}); "
+            f"all source runs and this run must use the same vuf.pooling."
+        )
+
     layer_sets = [set(int(x) for x in m["layer"].tolist()) for m in metas]
     common = sorted(set.intersection(*layer_sets))
     if not common:

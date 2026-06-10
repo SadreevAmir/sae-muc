@@ -160,19 +160,27 @@ def _nan_probs(n: int) -> np.ndarray:
 
 
 def _load_pooled_hidden(
-    ctx: PipelineContext, sample_ids: list[str], layers: int | list[int],
+    ctx: PipelineContext,
+    sample_ids: list[str],
+    layers: int | list[int],
+    pooling: str | None = None,
 ) -> np.ndarray:
     """Pool the residual stream at `layers` per sample and concatenate.
 
     Returns [n, d_model * len(layers)]. The paper's probes source from a
     *range* of layers (App F.1 "sourced from multiple layers"), concatenated
     into one feature vector — a single int keeps the legacy single-layer probe.
+
+    `pooling` defaults to cfg.stages.vuf.pooling (the classifier probe inherits
+    the extraction pooling); the App F.1 regressor / SEP probes pass an explicit
+    "last_token_q" since the paper pins their token to the last question token
+    (TBG), independent of the VUF-extraction pooling knob.
     """
     import torch  # local import — keep top of module light
 
     layer_list = [int(layers)] if isinstance(layers, int) else [int(l) for l in layers]
     meta = ctx.store.load_parquet("hidden_states/meta.parquet").set_index("sample_id")
-    pooling = ctx.cfg.stages.vuf.pooling
+    pooling = pooling or ctx.cfg.stages.vuf.pooling
     per_layer: list[np.ndarray] = []
     for layer in layer_list:
         tensors = ctx.store.load_safetensors(f"hidden_states/layer_{layer}.safetensors")
@@ -233,7 +241,9 @@ def _fit_regressor_probes(
                 f"{probe_layer_range(dataset, uncertainty)} has no layers in "
                 f"available={available}."
             )
-        H = _load_pooled_hidden(ctx, sids, layers)
+        # last_token_q == TBG: the paper pins the probe input to the question's
+        # last token, independent of cfg.stages.vuf.pooling.
+        H = _load_pooled_hidden(ctx, sids, layers, pooling="last_token_q")
         y_target = df[target_col].to_numpy(dtype=float)
         ridge = Ridge()
         ridge.fit(H[train_pos], y_target[train_pos])
@@ -259,6 +269,11 @@ def _fit_sep_baseline(
     the paper's adaptation. Uses the App F.1 SU range. Returns (prob_all,
     metrics) — AUROC/ACC evaluated against the hallucination labels on the same
     train/test split as the proposed detector.
+
+    This reproduces the TBG setting; the paper also reports a sentence-form
+    (answer-pooled) SEP, which is not reproduced here (it needs answer-token
+    pooling). The hidden-state classifier probe (lr_hidden, App F.2 / Table 7)
+    is the closest in-pipeline relative.
     """
     dataset = ctx.cfg.dataset.name
     layers = [l for l in probe_layer_range(dataset, "su") if l in available]
@@ -267,7 +282,8 @@ def _fit_sep_baseline(
             f"SEP baseline but App F.1 SU range {probe_layer_range(dataset, 'su')} "
             f"has no layers in available={available}."
         )
-    H = _load_pooled_hidden(ctx, df["sample_id"].tolist(), layers)
+    # TBG = last token before generating = last question token.
+    H = _load_pooled_hidden(ctx, df["sample_id"].tolist(), layers, pooling="last_token_q")
     train_pos = trainable_idx[idx_train]
     test_pos = trainable_idx[idx_test]
     # Binarize SU at the train-split median (data-derived, no paper constant).

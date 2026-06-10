@@ -223,7 +223,9 @@ def _abstention_categories(
         if bool(row["is_refusal"]):
             ns = int(n_samples.get(sid, 0))
             na = int(n_abstain.get(sid, 0))
-            key = "consistently_abstained" if ns > 0 and na == ns else "partly_abstained"
+            # consistently = every sample abstains; partly = >=1 complies. With
+            # no samples (na==ns==0) none complies → consistently (vacuous).
+            key = "consistently_abstained" if na == ns else "partly_abstained"
             counts[key] += 1
         elif row["is_correct"] is True:
             counts["complying_correct"] += 1
