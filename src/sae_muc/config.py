@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _Frozen(BaseModel):
@@ -145,7 +145,12 @@ class InterveneStage(_Frozen):
     #              1.0, Mistral-7B 0.4, Qwen2.5-7B 3.0, Llama-3.1-70B 4.0.
     # The 1.0 default matches Llama-8B by coincidence; Qwen/Mistral runs must
     # set "paper" (or the right float) — a global 1.0 under-steers Qwen 3×.
-    alpha_max: float | Literal["paper"] = 1.0
+    #   list   — run each ceiling as its own adaptive variant in ONE run,
+    #            reusing all upstream artefacts. Output lands in per-ceiling
+    #            dirs intervention/adaptive_amax_{v:+.2f}; meta.parquet gets one
+    #            row per ceiling. A scalar (float/"paper") keeps the legacy
+    #            single intervention/adaptive dir + single meta row.
+    alpha_max: float | Literal["paper"] | list[float | Literal["paper"]] = 1.0
     # Layer(s) where the hook is registered. The paper applies the linear VUF
     # to a contiguous range of layers (App E.1, Tab.5):
     #   "paper_range" — per-model App E.1 range (Llama 15-31, Mistral 15-31,
@@ -180,6 +185,29 @@ class InterveneStage(_Frozen):
     #   "auto" — pick combined / hidden / combined_full per detector_method.
     #   else  — read prob_hallucinate_<gate_detector_method> directly.
     gate_detector_method: Literal["auto", "verbal", "semantic", "combined", "hidden", "combined_full"] = "auto"
+
+    @field_validator("alpha_max")
+    @classmethod
+    def _check_alpha_max(cls, v):
+        """A list ceiling-sweep must be non-empty; each entry is "paper" or > 0.
+
+        The SCALAR path is intentionally left unvalidated for back-compat (a
+        non-positive scalar was always accepted); only the new list feature
+        enforces the entries-must-be-positive guarantee.
+        """
+        if not isinstance(v, list):
+            return v
+        if not v:
+            raise ValueError("intervene.alpha_max list must not be empty")
+        for entry in v:
+            if entry == "paper":
+                continue
+            if not (isinstance(entry, (int, float)) and entry > 0):
+                raise ValueError(
+                    f"intervene.alpha_max entries must be \"paper\" or a number "
+                    f"> 0, got {entry!r}"
+                )
+        return v
 
 
 class DetectStage(_Frozen):

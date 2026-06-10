@@ -59,6 +59,10 @@ def _alpha_dir(alpha: float) -> str:
     return f"intervention/alpha_{alpha:+.2f}"
 
 
+def _adaptive_amax_dir(alpha_max: float) -> str:
+    return f"intervention/adaptive_amax_{alpha_max:+.2f}"
+
+
 def _build_hook(direction: "torch.Tensor", alpha: float):
     """Returns a forward-hook body that adds α·direction to the residual stream."""
 
@@ -373,6 +377,31 @@ def _resolve_alpha_max(alpha_max_cfg: float | str, model_name: str) -> float:
     return float(alpha_max_cfg)
 
 
+def _resolve_alpha_max_list(
+    alpha_max_cfg: float | str | list, model_name: str
+) -> list[float]:
+    """Resolve cfg.alpha_max to an ORDERED list of positive float ceilings.
+
+    A scalar (float or "paper") becomes a 1-element list. Each list entry is
+    resolved via `_resolve_alpha_max`; duplicates are dropped AFTER resolution
+    on the per-ceiling DIRECTORY key (not the raw float), preserving
+    first-occurrence order. Deduping on the dir keeps two ceilings that round
+    to the same `_adaptive_amax_dir` (e.g. 0.201 and 0.204 → adaptive_amax_+0.20)
+    from silently overwriting each other's artefacts / emitting duplicate meta
+    paths (e.g. [0.4, "paper"] on a Mistral model — both 0.4 — collapses to one).
+    """
+    raw = alpha_max_cfg if isinstance(alpha_max_cfg, list) else [alpha_max_cfg]
+    out: list[float] = []
+    seen_dirs: set[str] = set()
+    for entry in raw:
+        value = _resolve_alpha_max(entry, model_name)
+        variant_dir = _adaptive_amax_dir(value)
+        if variant_dir not in seen_dirs:
+            seen_dirs.add(variant_dir)
+            out.append(value)
+    return out
+
+
 def _compute_adaptive_alphas(
     ctx: PipelineContext,
     sample_ids: list[str],
@@ -503,45 +532,25 @@ def _load_at_risk_set(ctx: PipelineContext) -> set[str]:
     return set(detection.loc[detection["is_at_risk"].astype(bool), "sample_id"].astype(str))
 
 
-def _run_adaptive(
+def _adaptive_steered_rows(
     ctx: PipelineContext,
     prompts: list[str],
     sample_ids: list[str],
     directions: dict[int, "torch.Tensor"],
     target_layers: list[int],
-) -> list[str]:
-    cfg = ctx.cfg.stages.intervene
+    alphas_df: pd.DataFrame,
+    *,
+    at_risk: set[str] | None,
+    baseline: pd.DataFrame | None,
+) -> list[dict]:
+    """Per-sample steered greedy+sampled generation for one ceiling's α frame.
+
+    One prompt at a time: build a constant-α hook with that question's α and
+    run the greedy + sampled generate pair. Slower than batching, but keeps
+    the hook code dead-simple and side-steps per-sequence α bookkeeping across
+    num_return_sequences replication. Batched per-sample α is in TODO.
+    """
     gen_cfg = ctx.cfg.stages.generate
-
-    alpha_max = _resolve_alpha_max(cfg.alpha_max, ctx.cfg.model.name)
-    alphas_df = _compute_adaptive_alphas(ctx, sample_ids, alpha_max)
-
-    if cfg.gate_by_detector:
-        at_risk = _load_at_risk_set(ctx)
-        # Force α=0 on the alphas frame for samples the detector flagged safe,
-        # so downstream consumers (sweeps, plots) see a faithful α distribution.
-        gate_mask = alphas_df["sample_id"].isin(at_risk).to_numpy()
-        alphas_df.loc[~gate_mask, "alpha"] = 0.0
-        log.info(
-            "gate_by_detector=True: %d/%d samples at-risk (skipping intervention "
-            "on the rest, baseline reused)",
-            int(gate_mask.sum()), len(alphas_df),
-        )
-        # Reuse the plain baseline for gated-out (safe) samples — the steered
-        # generation is plain, so copy the matching plain rows (App C / §2.15).
-        baseline = select_prompt_kind(
-            ctx.store.load_parquet("generations.parquet"), PROMPT_PLAIN
-        )
-    else:
-        at_risk = None
-        baseline = None
-
-    ctx.store.save_parquet(f"{ADAPTIVE_DIR}/alphas.parquet", alphas_df)
-
-    # One prompt at a time: build a constant-α hook with that question's α and
-    # run the greedy + sampled generate pair. Slower than batching, but keeps
-    # the hook code dead-simple and side-steps per-sequence α bookkeeping
-    # across num_return_sequences replication. Batched per-sample α is in TODO.
     rows: list[dict] = []
     for i, (sid, prompt) in enumerate(zip(sample_ids, prompts, strict=True)):
         if at_risk is not None and sid not in at_risk:
@@ -563,13 +572,64 @@ def _run_adaptive(
         rows.extend(
             _rows_for_generations([sid], greedy_i, sampled_i, alpha=alpha_i)
         )
+    return rows
 
-    gen_path = f"{ADAPTIVE_DIR}/generations.parquet"
-    ctx.store.save_parquet(gen_path, pd.DataFrame(rows))
+
+def _run_adaptive(
+    ctx: PipelineContext,
+    prompts: list[str],
+    sample_ids: list[str],
+    directions: dict[int, "torch.Tensor"],
+    target_layers: list[int],
+) -> list[str]:
+    cfg = ctx.cfg.stages.intervene
+
+    # Ceiling-independent gate: compute the at-risk set + plain baseline ONCE.
+    if cfg.gate_by_detector:
+        at_risk = _load_at_risk_set(ctx)
+        # Reuse the plain baseline for gated-out (safe) samples — the steered
+        # generation is plain, so copy the matching plain rows (App C / §2.15).
+        baseline = select_prompt_kind(
+            ctx.store.load_parquet("generations.parquet"), PROMPT_PLAIN
+        )
+    else:
+        at_risk = None
+        baseline = None
+
+    ceilings = _resolve_alpha_max_list(cfg.alpha_max, ctx.cfg.model.name)
+    # Back-compat: a scalar alpha_max keeps the legacy single intervention/adaptive
+    # dir + single meta row (byte-identical). A list — even 1-element — uses the
+    # per-ceiling intervention/adaptive_amax_{v:+.2f} dirs.
+    is_sweep = isinstance(cfg.alpha_max, list)
 
     layers_label = _layers_str(target_layers)
-    meta = pd.DataFrame(
-        [
+    outputs: list[str] = []
+    meta_rows: list[dict] = []
+    for alpha_max in ceilings:
+        variant_dir = _adaptive_amax_dir(alpha_max) if is_sweep else ADAPTIVE_DIR
+
+        alphas_df = _compute_adaptive_alphas(ctx, sample_ids, alpha_max)
+        if cfg.gate_by_detector:
+            # Force α=0 on the alphas frame for samples the detector flagged safe,
+            # so downstream consumers (sweeps, plots) see a faithful α distribution.
+            gate_mask = alphas_df["sample_id"].isin(at_risk).to_numpy()
+            alphas_df.loc[~gate_mask, "alpha"] = 0.0
+            log.info(
+                "gate_by_detector=True (α_max=%.2f): %d/%d samples at-risk "
+                "(skipping intervention on the rest, baseline reused)",
+                alpha_max, int(gate_mask.sum()), len(alphas_df),
+            )
+
+        ctx.store.save_parquet(f"{variant_dir}/alphas.parquet", alphas_df)
+
+        rows = _adaptive_steered_rows(
+            ctx, prompts, sample_ids, directions, target_layers, alphas_df,
+            at_risk=at_risk, baseline=baseline,
+        )
+        gen_path = f"{variant_dir}/generations.parquet"
+        ctx.store.save_parquet(gen_path, pd.DataFrame(rows))
+
+        meta_rows.append(
             {
                 "alpha": None,
                 "path": gen_path,
@@ -581,10 +641,12 @@ def _run_adaptive(
                 "max_alpha": float(alphas_df["alpha"].max()),
                 "alpha_max": float(alpha_max),
             }
-        ]
-    )
-    ctx.store.save_parquet(OUTPUT_META, meta)
-    return [f"{ADAPTIVE_DIR}/alphas.parquet", gen_path, OUTPUT_META]
+        )
+        outputs.extend([f"{variant_dir}/alphas.parquet", gen_path])
+
+    ctx.store.save_parquet(OUTPUT_META, pd.DataFrame(meta_rows))
+    outputs.append(OUTPUT_META)
+    return outputs
 
 
 def _rows_for_generations(sample_ids, greedy, sampled, *, alpha: float) -> list[dict]:
@@ -650,9 +712,9 @@ def run(ctx: PipelineContext) -> list[str]:
     _log_sae_feature_summary(ctx, target_layers)
     if cfg.mode == "adaptive":
         log.info(
-            "mode=adaptive, method=%s, layers=%s, α_max=%.2f (per-question α via Eq.6)",
+            "mode=adaptive, method=%s, layers=%s, α_max=%s (per-question α via Eq.6)",
             cfg.method, layers_label,
-            _resolve_alpha_max(cfg.alpha_max, ctx.cfg.model.name),
+            _resolve_alpha_max_list(cfg.alpha_max, ctx.cfg.model.name),
         )
         return _run_adaptive(ctx, prompts, sample_ids, directions, target_layers)
     log.info(

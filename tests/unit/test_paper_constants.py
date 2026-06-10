@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from sae_muc.pipeline.intervene import _resolve_alpha_max
+from sae_muc.pipeline.intervene import _resolve_alpha_max, _resolve_alpha_max_list
 from sae_muc.pipeline.paper_layer_ranges import paper_layer_range, paper_max_alpha
 from sae_muc.pipeline.probe_layer_ranges import probe_layer_range, probe_layer_union
 
@@ -33,6 +33,16 @@ def test_resolve_alpha_max_paper_keyword():
 
 def test_resolve_alpha_max_explicit_float():
     assert _resolve_alpha_max(0.5, "any-model") == 0.5
+
+
+def test_resolve_alpha_max_list_dedups_on_dir_not_float():
+    """Two ceilings that round to the same adaptive_amax dir must collapse to
+    one, so they cannot overwrite each other's artefacts / duplicate meta paths.
+    [0.201, 0.204] both → adaptive_amax_+0.20, so only the first survives."""
+    assert _resolve_alpha_max_list([0.201, 0.204], "any-model") == [0.201]
+    assert _resolve_alpha_max_list([0.004, 0.001], "any-model") == [0.004]
+    # Distinct dirs are all kept, in first-occurrence order.
+    assert _resolve_alpha_max_list([0.2, 0.4, 0.2], "any-model") == [0.2, 0.4]
 
 
 def test_paper_layer_range_qwen_matches_app_e1():

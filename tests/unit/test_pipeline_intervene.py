@@ -617,6 +617,132 @@ def test_intervene_adaptive_writes_expected_files(fake_ctx):
     assert meta.iloc[0]["alpha_max"] == 0.5
 
 
+def test_intervene_adaptive_alpha_max_list_runs_per_ceiling(fake_ctx):
+    """A list alpha_max runs each ceiling as its own adaptive variant in ONE
+    run: per-ceiling dirs + one meta row each, reusing upstream artefacts.
+    Also re-scores VU per variant via judge_post (variant-generic)."""
+    from sae_muc.pipeline import judge_post
+
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    samples = fake_ctx.store.load_parquet("samples.parquet")
+    judge_rows = []
+    for sid in samples["sample_id"]:
+        for j in range(3):
+            judge_rows.append(
+                {"sample_id": sid, "kind": "sample", "gen_idx": j,
+                 "decisiveness": 0.5, "vu_score": 0.5, "raw": "0.5"}
+            )
+    fake_ctx.store.save_parquet("judge_scores.parquet", pd.DataFrame(judge_rows))
+    fake_ctx.store.save_parquet(
+        "semantic_entropy.parquet",
+        pd.DataFrame({
+            "sample_id": list(samples["sample_id"]),
+            "semantic_entropy": [0.5] * len(samples),
+            "n_clusters": [2] * len(samples),
+            "n_samples": [3] * len(samples),
+        }),
+    )
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=(0, 1, 2), d_model=8)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={
+                            "mode": "adaptive",
+                            "method": "linear_vuf",
+                            "alpha_max": [0.2, 0.4],
+                            "layer": 1,
+                        },
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    intervene.run(fake_ctx)
+
+    meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    assert len(meta) == 2
+    assert list(meta["alpha_max"]) == [0.2, 0.4]
+    assert list(meta["mode"]) == ["adaptive", "adaptive"]
+
+    for v in (0.2, 0.4):
+        d = f"intervention/adaptive_amax_{v:+.2f}"
+        gens = fake_ctx.store.load_parquet(f"{d}/generations.parquet")
+        alphas = fake_ctx.store.load_parquet(f"{d}/alphas.parquet")
+        assert not gens.empty
+        assert (alphas["alpha"] <= v).all()
+        # The meta row for this variant points at this dir's generations.
+        assert f"{d}/generations.parquet" in list(meta["path"])
+
+    # The legacy single-dir adaptive output must NOT exist for a list sweep.
+    assert not fake_ctx.store.exists("intervention/adaptive/generations.parquet")
+
+    # Downstream post-stage is variant-generic: it re-scores VU per meta row.
+    judge_post.run(fake_ctx)
+    for v in (0.2, 0.4):
+        scores = fake_ctx.store.load_parquet(
+            f"intervention/adaptive_amax_{v:+.2f}/judge_scores.parquet"
+        )
+        assert not scores.empty
+
+
+def test_intervene_adaptive_scalar_alpha_max_stays_legacy_dir(fake_ctx):
+    """Back-compat: a SCALAR alpha_max keeps the legacy intervention/adaptive
+    dir and a single meta row (no adaptive_amax_* dirs)."""
+    prepare.run(fake_ctx)
+    generate.run(fake_ctx)
+    samples = fake_ctx.store.load_parquet("samples.parquet")
+    judge_rows = []
+    for sid in samples["sample_id"]:
+        for j in range(3):
+            judge_rows.append(
+                {"sample_id": sid, "kind": "sample", "gen_idx": j,
+                 "decisiveness": 0.5, "vu_score": 0.5, "raw": "0.5"}
+            )
+    fake_ctx.store.save_parquet("judge_scores.parquet", pd.DataFrame(judge_rows))
+    fake_ctx.store.save_parquet(
+        "semantic_entropy.parquet",
+        pd.DataFrame({
+            "sample_id": list(samples["sample_id"]),
+            "semantic_entropy": [0.5] * len(samples),
+            "n_clusters": [2] * len(samples),
+            "n_samples": [3] * len(samples),
+        }),
+    )
+    hidden_states.run(fake_ctx)
+    _seed_vuf_artefacts(fake_ctx, layers=(0, 1, 2), d_model=8)
+
+    new_cfg = fake_ctx.cfg.model_copy(
+        update={
+            "stages": fake_ctx.cfg.stages.model_copy(
+                update={
+                    "intervene": fake_ctx.cfg.stages.intervene.model_copy(
+                        update={"mode": "adaptive", "alpha_max": 0.5, "layer": 1},
+                    ),
+                }
+            )
+        }
+    )
+    object.__setattr__(fake_ctx, "cfg", new_cfg)
+
+    outputs = intervene.run(fake_ctx)
+    assert outputs == [
+        "intervention/adaptive/alphas.parquet",
+        "intervention/adaptive/generations.parquet",
+        "intervention/meta.parquet",
+    ]
+    meta = fake_ctx.store.load_parquet("intervention/meta.parquet")
+    assert len(meta) == 1
+    assert list(meta["mode"]) == ["adaptive"]
+    assert meta.iloc[0]["alpha_max"] == 0.5
+
+
 def test_skip_decode_step_passes_through_seq_len_1():
     """P1: with apply_during_generation=False, hook is bypassed for seq_len==1."""
     from sae_muc.pipeline.intervene import _skip_decode_step
