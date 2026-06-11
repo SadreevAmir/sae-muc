@@ -55,7 +55,12 @@ class HFLocalNLIBackend:
         log = logging.getLogger(__name__)
         log.info("Loading NLI model: %s", self.name)
         tokenizer = AutoTokenizer.from_pretrained(self.name)
-        model = AutoModelForSequenceClassification.from_pretrained(self.name)
+        # use_safetensors: transformers >=4.57 + torch <2.6 refuses the torch.load
+        # (.bin) path (CVE-2025-32434). Force safetensors so NLI models (e.g.
+        # deberta-v2-xxlarge-mnli) load under our cu121 / torch-2.5.1 pin.
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.name, use_safetensors=True
+        )
         model.eval()
 
         if torch.cuda.is_available():

@@ -72,6 +72,7 @@ class HFLocalBackend:
         model = AutoModelForCausalLM.from_pretrained(
             self.name,
             torch_dtype=torch_dtype,
+            use_safetensors=True,  # torch<2.6 + transformers CVE-2025-32434 guard blocks .bin/torch.load
         )
         # SINGLE-CARD ASSUMPTION: pin the whole model to cuda:0 rather than
         # device_map="auto". Server runs expose exactly one GPU via Docker
