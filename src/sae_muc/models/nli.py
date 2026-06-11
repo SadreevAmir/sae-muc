@@ -97,6 +97,10 @@ class HFLocalNLIBackend:
             hypotheses,
             padding=True,
             truncation=True,
+            # DeBERTa NLI context is 512; the tokenizer's model_max_length is the
+            # int sentinel, so without an explicit max_length transformers can't
+            # truncate (warns + skips it) and a long answer pair would overflow.
+            max_length=512,
             return_tensors="pt",
         ).to(device)
         with torch.inference_mode():
