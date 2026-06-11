@@ -17,7 +17,7 @@ set -euo pipefail
 
 SSH_HOST=${SAE_MUC_SSH_HOST:?"set SAE_MUC_SSH_HOST (e.g. user@server)"}
 REPO_PATH=${SAE_MUC_REPO_PATH:-"~/sae-muc"}
-BRANCH=${SAE_MUC_BRANCH:-"feature/server-pipeline"}
+BRANCH=${SAE_MUC_BRANCH:-"main"}
 GPU=${SAE_MUC_GPU:?"set SAE_MUC_GPU (nvtop index of the GPU to use, e.g. 4)"}
 
 # Default image tag is derived from the SSH user (the server-side username)
