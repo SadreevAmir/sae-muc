@@ -1,0 +1,62 @@
+# Server smoke: SAE-based MUC (sae_emd) on Mistral-7B-Instruct-v0.3 x TriviaQA,
+# SAME layers [16,24] as the linear smoke for an apples-to-apples linear-vs-SAE
+# comparison. mistral-7b-res-wg ships only {8,16,24}; we use the two that fall in
+# the paper App E.1 range (15-31): 16 and 24. Exercises the sae_id_overrides
+# registry path + assert_sae_layers_available.
+#
+# alpha_max="paper" -> 0.4 (Mistral, App G.1) as a gain. NOTE: 0.4 is the paper
+# value for *linear_vuf*; sae_emd is our extension with no paper alpha, so this is
+# only a starting point — the SAE gain may want its own tuning later.
+#
+# Run: scripts/docker/run.sh <gpu_idx> run --config configs/experiment/mistral7b_triviaqa_smoke_sae.yaml
+# Requires HF_TOKEN (Mistral license accepted) + CHERRYIN_API_KEY in .env.
+
+extends: ../base.yaml
+
+model: ../model/mistral7b.yaml
+judge: ../judge/cherryin_qwen3_235b.yaml
+nli:   ../nli/deberta_v2_xxlarge.yaml
+
+dataset:
+  name: triviaqa
+  split: validation
+  n_samples: 30
+  seed: 42
+
+sae:
+  provider: sae_lens
+  release: mistral-7b-res-wg
+  # sparse release: absolute hook paths (no {layer} template fits). In-range layers only.
+  sae_id_overrides:
+    16: blocks.16.hook_resid_pre
+    24: blocks.24.hook_resid_pre
+
+stages:
+  generate:
+    n_samples: 10
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 100
+    prompt_regime: split
+  vuf:
+    layers: [16, 24]
+    selection: top_n
+    n_top: 10
+    n_bot: 10
+    pooling: last_token_q
+  sae_features:
+    k_top: 16
+    selection_mode: topk
+  detect:
+    detector_method: combined
+  intervene:
+    method: sae_emd
+    mode: adaptive
+    alpha_max: paper        # Mistral -> 0.4 (App G.1), applied as a gain
+    layer: [16, 24]
+    sae_emd_delta: cohen_d
+    gate_by_detector: false
+  diagnostics:
+    enabled: false
+
+seed: 42

@@ -1,0 +1,49 @@
+# Server smoke: paper MUC (linear_vuf) on Mistral-7B-Instruct-v0.3 x TriviaQA.
+# First real-CUDA end-to-end of the 7B path. Mini of the full run (same
+# model/judge/nli/layers/method); only n_samples differs, so per-sample time +
+# cost extrapolate to N=1000.
+#
+# alpha_max is a GAIN (clip((su_norm-vu)*alpha_max, 0, alpha_max), matching the
+# official author code); "paper" -> 0.4 for Mistral (App G.1). Single value here
+# (no sweep) to keep the smoke fast; the 0.2..3.0 gain sweep is for the full run.
+#
+# Run: scripts/docker/run.sh <gpu_idx> run --config configs/experiment/mistral7b_triviaqa_smoke_linear.yaml
+# Requires HF_TOKEN (Mistral license accepted) + CHERRYIN_API_KEY in .env.
+
+extends: ../base.yaml
+
+model: ../model/mistral7b.yaml
+judge: ../judge/cherryin_qwen3_235b.yaml
+nli:   ../nli/deberta_v2_xxlarge.yaml   # paper NLI — also validates memory (Mistral+NLI on one card)
+
+dataset:
+  name: triviaqa
+  split: validation
+  n_samples: 30
+  seed: 42
+
+stages:
+  generate:
+    n_samples: 10
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 100
+    prompt_regime: split
+  vuf:
+    layers: [16, 24]
+    selection: top_n
+    n_top: 10
+    n_bot: 10
+    pooling: last_token_q
+  detect:
+    detector_method: combined
+  intervene:
+    method: linear_vuf
+    mode: adaptive
+    alpha_max: paper        # Mistral -> 0.4 (App G.1), applied as a gain
+    layer: [16, 24]
+    gate_by_detector: false
+  diagnostics:
+    enabled: false          # skip heavy MMLU/HellaSwag/GSM8K downloads for the smoke
+
+seed: 42
