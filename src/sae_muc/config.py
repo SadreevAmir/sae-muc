@@ -38,6 +38,18 @@ class JudgeConfig(_Frozen):
     provider: Literal["openrouter", "cherryin", "fake"]
     model: str
     max_retries: int = 3
+    # Number of judge calls kept in flight at once via a continuous worker
+    # pool (judge / accuracy_judge stages). 1 (default) is sequential and
+    # byte-identical to the pre-pool behaviour; raise it for remote backends
+    # that tolerate concurrency (CherryIn load-tested fine at 8).
+    concurrency: int = 1
+
+    @field_validator("concurrency")
+    @classmethod
+    def _check_concurrency(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("judge.concurrency must be >= 1")
+        return v
 
 
 class NLIConfig(_Frozen):

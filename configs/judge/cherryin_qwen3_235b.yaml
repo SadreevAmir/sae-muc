@@ -6,3 +6,6 @@
 provider: cherryin
 model: qwen/qwen3-235b-a22b-instruct-2507
 max_retries: 3
+# CherryIn load-tested clean at 8 concurrent calls (~6 calls/s); cuts the
+# judge stages from the full-run bottleneck (~13h @ N=1000) to ~1.6h.
+concurrency: 8

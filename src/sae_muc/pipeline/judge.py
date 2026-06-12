@@ -8,8 +8,11 @@ downstream code can decide how to handle them.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
@@ -51,20 +54,25 @@ def score_generations(
     """
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
     total = len(gens)
+    concurrency = ctx.cfg.judge.concurrency
     log.info(
-        "scoring VU for %d generations via %s (provider=%s) -> %s",
-        total, ctx.cfg.judge.model, ctx.cfg.judge.provider, output_name,
+        "scoring VU for %d generations via %s (provider=%s, concurrency=%d) -> %s",
+        total, ctx.cfg.judge.model, ctx.cfg.judge.provider, concurrency, output_name,
     )
     progress_every = max(1, total // 10)
 
-    rows: list[dict] = []
-    unparsed = 0
-    errored = 0
-    for i, (_, gen_row) in enumerate(gens.iterrows()):
+    has_prompt_kind = "prompt_kind" in gens.columns
+    # Thread-safe progress: workers complete out of order, so count
+    # finished calls rather than relying on the result index.
+    progress_lock = threading.Lock()
+    done = itertools.count(1)
+
+    def score_one(gen_row) -> tuple[dict, str]:
         question = samples.loc[gen_row["sample_id"], "question"]
         prompt = format_vu_judge_prompt(question=question, answer=gen_row["text"])
 
         # Per-prompt isolation: a flaky judge provider shouldn't kill the stage.
+        status = "ok"
         try:
             resp = ctx.judge.generate(
                 [prompt],
@@ -75,7 +83,7 @@ def score_generations(
             text = resp[0][0].text
             d = parse_decisiveness(text)
             if d is None:
-                unparsed += 1
+                status = "unparsed"
         except Exception as e:  # noqa: BLE001
             log.warning(
                 "judge: giving up on sample_id=%s gen_idx=%d after retries: %s: %s",
@@ -83,7 +91,7 @@ def score_generations(
             )
             text = f"ERROR: {type(e).__name__}: {e}"
             d = None
-            errored += 1
+            status = "errored"
 
         row = {
             "sample_id": gen_row["sample_id"],
@@ -93,11 +101,25 @@ def score_generations(
             "vu_score": (1.0 - d) if d is not None else None,
             "raw": text,
         }
-        if "prompt_kind" in gens.columns:
+        if has_prompt_kind:
             row["prompt_kind"] = gen_row.get("prompt_kind")
-        rows.append(row)
-        if (i + 1) % progress_every == 0 and (i + 1) < total:
-            log.info("  progress: %d/%d (%d%%)", i + 1, total, (i + 1) * 100 // total)
+
+        with progress_lock:
+            n = next(done)
+            if n % progress_every == 0 and n < total:
+                log.info("  progress: %d/%d (%d%%)", n, total, n * 100 // total)
+        return row, status
+
+    gen_rows = [gen_row for _, gen_row in gens.iterrows()]
+    # Continuous worker pool: `concurrency` calls stay in flight and the next
+    # task starts the instant any worker frees up. `map` preserves input order,
+    # so the output rows match `gens` exactly (byte-identical at concurrency=1).
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        results = list(pool.map(score_one, gen_rows))
+
+    rows = [r for r, _ in results]
+    unparsed = sum(1 for _, s in results if s == "unparsed")
+    errored = sum(1 for _, s in results if s == "errored")
 
     if unparsed:
         log.warning("judge: %d/%d responses were unparseable", unparsed, len(rows))
