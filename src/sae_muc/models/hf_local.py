@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 from sae_muc.models.base import Generation
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import torch
 
 log = logging.getLogger(__name__)
@@ -105,19 +107,11 @@ class HFLocalBackend:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        batch_size: int = 0,
     ) -> list[list[Generation]]:
         import torch
 
         self._ensure_loaded()
-        texts = [self._apply_chat_template(p, system=system) for p in prompts]
-        prev_side = self._tokenizer.padding_side
-        self._tokenizer.padding_side = "left"
-        try:
-            inputs = self._tokenizer(texts, return_tensors="pt", padding=True).to(self._device)
-        finally:
-            self._tokenizer.padding_side = prev_side
-
-        input_len = inputs.input_ids.shape[1]
         do_sample = temperature > 1e-5
         gen_kwargs: dict = {
             "max_new_tokens": max_new_tokens,
@@ -129,25 +123,54 @@ class HFLocalBackend:
             gen_kwargs["temperature"] = temperature
             _add_truncation_kwargs(gen_kwargs, top_p, top_k)
 
-        # Re-seed torch's global RNG before each sampled .generate() so that
-        # the same (cfg.seed, prompt, n) yields the same sample set across
-        # runs and across before/after intervention sweeps. No-op for greedy.
+        # Re-seed torch's global RNG ONCE before the (possibly chunked) sampled
+        # run so that the same (cfg.seed, prompt, n) yields the same sample set
+        # across runs and across before/after intervention sweeps. Seeding once
+        # (not per chunk) keeps the RNG stream monotonic; with batch_size=0
+        # there is a single chunk so this is byte-identical to the old path.
+        # No-op for greedy.
         if seed is not None and do_sample:
             torch.manual_seed(int(seed))
+
+        # Chunk the prompt list so the effective GPU batch (chunk * n) is bounded
+        # by `batch_size`, not by len(prompts). batch_size<=0 → one chunk (all
+        # prompts), preserving the pre-batching behaviour exactly. Output order
+        # is concatenated chunk-by-chunk, so it matches the single-batch path.
+        step = len(prompts) if batch_size <= 0 else int(batch_size)
+        step = max(1, step)
+        result: list[list[Generation]] = []
+        for start in range(0, len(prompts), step):
+            chunk = prompts[start : start + step]
+            result.extend(self._generate_chunk(chunk, n=n, system=system, gen_kwargs=gen_kwargs))
+        return result
+
+    def _generate_chunk(
+        self, prompts: list[str], *, n: int, system: str | None, gen_kwargs: dict
+    ) -> list[list[Generation]]:
+        """Tokenise, generate, and decode one chunk of prompts in one forward.
+
+        The `decoded[i * n + j]` index math is chunk-local, so concatenating the
+        per-chunk results reproduces the order of a single full-batch call.
+        """
+        import torch
+
+        texts = [self._apply_chat_template(p, system=system) for p in prompts]
+        prev_side = self._tokenizer.padding_side
+        self._tokenizer.padding_side = "left"
+        try:
+            inputs = self._tokenizer(texts, return_tensors="pt", padding=True).to(self._device)
+        finally:
+            self._tokenizer.padding_side = prev_side
+
+        input_len = inputs.input_ids.shape[1]
         with torch.inference_mode():
             out = self._model.generate(**inputs, **gen_kwargs)
 
         decoded = self._tokenizer.batch_decode(out[:, input_len:], skip_special_tokens=True)
-
-        result: list[list[Generation]] = []
-        for i in range(len(prompts)):
-            result.append(
-                [
-                    Generation(text=decoded[i * n + j], finish_reason="stop")
-                    for j in range(n)
-                ]
-            )
-        return result
+        return [
+            [Generation(text=decoded[i * n + j], finish_reason="stop") for j in range(n)]
+            for i in range(len(prompts))
+        ]
 
     def _apply_chat_template(self, prompt: str, *, system: str | None) -> str:
         messages: list[dict[str, str]] = []
@@ -165,26 +188,28 @@ class HFLocalBackend:
     # Hidden states                                                      #
     # ----------------------------------------------------------------- #
 
-    def hidden_states(self, texts: list[str]) -> list["torch.Tensor"]:
-        """Forward each text once; return [n_layers+1, seq_len, d_model] tensors.
+    def hidden_states(
+        self, texts: list[str], *, dtype: str = "float32"
+    ) -> "Iterator[torch.Tensor]":
+        """Forward each text once; yield [n_layers+1, seq_len, d_model] tensors.
 
         Index 0 is the token-embedding output; indices 1..n_layers are
-        transformer-block residual-stream outputs. Tensors are returned on CPU
-        in float32 so downstream code (safetensors, analysis) can consume them
-        uniformly regardless of the model's compute dtype.
+        transformer-block residual-stream outputs. Tensors are yielded ONE AT A
+        TIME on CPU in `dtype` (default float32) so the caller can stream-save
+        without holding all N in memory. `dtype` ∈ {float32, bfloat16, float16};
+        bfloat16 halves the host-RAM/disk footprint at no downstream cost.
         """
         import torch
 
         self._ensure_loaded()
-        result: list[torch.Tensor] = []
+        out_dtype = getattr(torch, _DTYPE_MAP[dtype])
         for text in texts:
             inputs = self._tokenizer(text, return_tensors="pt").to(self._device)
             with torch.inference_mode():
                 out = self._model(**inputs, output_hidden_states=True, return_dict=True)
             # tuple of (n_layers+1) tensors, each shape [1, seq_len, d_model]
             stacked = torch.stack(out.hidden_states, dim=0).squeeze(1)
-            result.append(stacked.float().cpu())
-        return result
+            yield stacked.to(out_dtype).cpu()
 
     def tokenize_length(self, text: str, *, add_special_tokens: bool = True) -> int:
         self._ensure_loaded()

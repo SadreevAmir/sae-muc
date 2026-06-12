@@ -35,6 +35,10 @@ stages:
     temperature_high: 1.0
     max_new_tokens: 100
     prompt_regime: split
+    batch_size: 64           # prompts/forward: sampled GPU batch = 64*10=640 seqs, KV ~11GB (256 OOMs on decode KV ~44GB). Bump if nvidia-smi shows headroom.
+  hidden_states:
+    storage: question_only   # pooling=last_token_q needs only question tokens; halves seq_len, drops answer dependency
+    dtype: bfloat16          # halves host-RAM/disk vs fp32 at no downstream cost (pooling/Cohen's d/Ridge fine in bf16)
   vuf:
     layers: [16, 24]
     selection: top_n

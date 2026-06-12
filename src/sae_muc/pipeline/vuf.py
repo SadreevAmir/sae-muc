@@ -215,8 +215,11 @@ def run(ctx: PipelineContext) -> list[str]:
         tensors = ctx.store.load_safetensors(_layer_in_path(layer))
 
         def pooled(sid: str, _tensors=tensors) -> "torch.Tensor":
+            # Upcast to float32 before the diff-in-means so a bf16 hidden-state
+            # artefact (large-N runs) doesn't lose precision when averaging
+            # hundreds of vectors. No-op when the artefact is already float32.
             return _pool(
-                _tensors[sid],
+                _tensors[sid].float(),
                 stage_cfg.pooling,
                 int(meta.loc[sid, "question_len"]),
                 int(meta.loc[sid, "seq_len"]),

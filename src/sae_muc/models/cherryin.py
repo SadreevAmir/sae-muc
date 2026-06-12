@@ -45,11 +45,13 @@ class CherryInBackend:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        batch_size: int = 0,
     ) -> list[list[Generation]]:
         # remote API: randomness is server-side, ignore the seed. top_p/top_k
         # are paper-pinned for HF-local answer sampling only (judge calls
-        # don't pass them) — accept-and-ignore here.
-        _ = seed, top_p, top_k
+        # don't pass them). batch_size is a GPU knob — no-op here.
+        # Accept-and-ignore all three.
+        _ = seed, top_p, top_k, batch_size
         out: list[list[Generation]] = []
         for prompt in prompts:
             messages: list[dict[str, str]] = []

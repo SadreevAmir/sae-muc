@@ -71,6 +71,14 @@ class GenerateStage(_Frozen):
     #   "eliciting_only" — generate only the eliciting set and reuse it for
     #       everything (cheaper; the pre-split behaviour, for smokes).
     prompt_regime: Literal["split", "eliciting_only"] = "split"
+    # Prompt-batch size for the HF-local backend. The effective GPU batch at
+    # generation is `batch_size * n` (num_return_sequences), so this caps peak
+    # activation/KV-cache memory independently of N. 0 (default) means "all
+    # prompts in one forward" — byte-identical to the pre-batching path, so
+    # smokes stay unchanged. Set it on large-N runs (e.g. 256 → ≤256*10=2560
+    # sequences per sampled forward on a 48GB card). Ignored by remote/fake
+    # backends.
+    batch_size: int = 0
     # Nucleus / top-K truncation for sampled decoding (paper App C p.18:
     # "temperature of 1 with nucleus sampling (P = 0.9) and top-K sampling
     # (K = 50)"). Pinned here so the high-T sample distribution feeding SE
@@ -94,6 +102,13 @@ class HiddenStatesStage(_Frozen):
     #     last *stored* token, which may belong to the answer.
     storage: Literal["full", "question_only", "last_k_tokens"] = "full"
     last_k: int = 8
+    # CPU dtype of the saved residual-stream tensors. `float32` (default) keeps
+    # existing artefacts byte-identical. `bfloat16` halves host-RAM peak during
+    # extraction and the on-disk safetensors size at no downstream cost
+    # (pooling / Cohen's d / Ridge all run fine in bf16) — set it on large-N
+    # runs. The HF-local backend casts to this dtype before moving to CPU;
+    # the fake backend keeps float32 (tests assert exact values).
+    dtype: Literal["float32", "bfloat16", "float16"] = "float32"
 
 
 class CategorizeStage(_Frozen):

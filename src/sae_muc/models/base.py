@@ -32,6 +32,7 @@ class LLMBackend(Protocol):
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        batch_size: int = 0,
     ) -> list[list[Generation]]:
         """Produce n completions per prompt.
 
@@ -46,5 +47,10 @@ class LLMBackend(Protocol):
         `top_p` / `top_k` pin nucleus / top-K truncation for sampled decoding
         (paper App C). They are applied only when sampling and only by the
         HF-local backend; remote judge backends ignore them.
+
+        `batch_size` caps the prompts forwarded together so the effective GPU
+        batch (`batch_size * n`) is bounded independently of `len(prompts)`.
+        0 (default) forwards all prompts at once. Honoured only by the HF-local
+        backend; the order of the returned list is unaffected by chunking.
         """
         ...

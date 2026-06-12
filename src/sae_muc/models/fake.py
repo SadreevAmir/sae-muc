@@ -49,8 +49,11 @@ class FakeBackend:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        batch_size: int = 0,
     ) -> list[list[Generation]]:
-        _ = max_new_tokens, system, seed, top_p, top_k  # unused; interface parity
+        # `batch_size` is a GPU-memory knob; the fake backend is in-process and
+        # ignores it (chunking can't change its deterministic per-prompt output).
+        _ = max_new_tokens, system, seed, top_p, top_k, batch_size  # interface parity
         out: list[list[Generation]] = []
         for prompt in prompts:
             per_prompt: list[Generation] = []
@@ -78,10 +81,17 @@ class FakeBackend:
         # Whitespace word count — good enough for tests; not a real tokeniser.
         return max(1, len(text.split()))
 
-    def hidden_states(self, texts: list[str]) -> list["torch.Tensor"]:
-        """Deterministic synthetic hidden states: [n_layers+1, seq_len, d_model]."""
+    def hidden_states(
+        self, texts: list[str], *, dtype: str = "float32"
+    ) -> list["torch.Tensor"]:
+        """Deterministic synthetic hidden states: [n_layers+1, seq_len, d_model].
+
+        `dtype` mirrors the HF-local backend's streaming knob; the fake keeps
+        float32 regardless (tests assert exact values) and ignores it.
+        """
         import torch
 
+        _ = dtype
         out: list[torch.Tensor] = []
         for text in texts:
             n_tokens = self.tokenize_length(text)

@@ -51,6 +51,7 @@ def _generate_set(
         seed=ctx.cfg.seed,
         top_p=stage_cfg.top_p,
         top_k=stage_cfg.top_k,
+        batch_size=stage_cfg.batch_size,
     )
     sampled = ctx.llm.generate(
         prompts,
@@ -60,6 +61,7 @@ def _generate_set(
         seed=ctx.cfg.seed,
         top_p=stage_cfg.top_p,
         top_k=stage_cfg.top_k,
+        batch_size=stage_cfg.batch_size,
     )
     return greedy, sampled
 

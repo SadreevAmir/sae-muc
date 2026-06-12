@@ -74,32 +74,51 @@ def run(ctx: PipelineContext) -> list[str]:
         question_lens.append(ctx.llm.tokenize_length(question_text))
 
     log.info(
-        "extracting residual-stream activations for %d samples (storage=%s%s)",
-        len(texts), storage,
+        "extracting residual-stream activations for %d samples (storage=%s, dtype=%s%s)",
+        len(texts), storage, stage_cfg.dtype,
         f", last_k={last_k}" if storage == "last_k_tokens" else "",
     )
-    hidden_list = ctx.llm.hidden_states(texts)
-    # Each element shape: [n_layers+1, seq_len_i, d_model]. Layer 0 is
-    # the token-embedding output; layers 1..n_layers are transformer blocks.
 
-    if storage == "last_k_tokens":
-        sliced: list = []
-        new_question_lens: list[int] = []
-        for hs, q_len in zip(hidden_list, question_lens, strict=True):
+    # Stream the per-sample tensors instead of materialising all N at once.
+    # The backend yields one [n_layers+1, seq_len_i, d_model] tensor per text
+    # (layer 0 = token-embedding output; layers 1..n_layers = transformer
+    # blocks). We split each into its per-layer slices immediately and drop the
+    # stacked source, so the only N-sized structures held are the per-layer
+    # dicts that ARE the artefact — never a second full-precision copy of them.
+    hidden_iter = ctx.llm.hidden_states(texts, dtype=stage_cfg.dtype)
+
+    embedding: dict[str, "object"] = {}
+    per_layer: list[dict[str, "object"]] = []  # per_layer[L][sid] = tensor
+    seq_lens: list[int] = []
+    stored_question_lens: list[int] = []
+    n_layers = 0
+
+    for sid, q_len, hs in zip(sample_ids, question_lens, hidden_iter, strict=True):
+        if storage == "last_k_tokens":
             seq_full = hs.shape[1]
             offset = max(0, seq_full - last_k)
-            sliced.append(hs[:, offset:, :])
-            # Translate question_len into the kept window: if the question
-            # tail is in the window, q_len_stored ≤ last_k. If the question
-            # ended before the window, q_len_stored = 0 and last_token_q
-            # will degenerate to position 0 (the last token before the kept
-            # window's start). Document but don't crash.
-            new_question_lens.append(max(0, q_len - offset))
-        hidden_list = sliced
-        question_lens = new_question_lens
+            hs = hs[:, offset:, :]
+            # Translate question_len into the kept window: if the question tail
+            # is in the window, q_len_stored ≤ last_k; if the question ended
+            # before the window, q_len_stored = 0 and last_token_q degenerates
+            # to position 0. Document but don't crash.
+            q_len = max(0, q_len - offset)
 
-    n_hidden = hidden_list[0].shape[0]
-    n_layers = n_hidden - 1
+        if not per_layer:  # first sample fixes the layer count
+            n_layers = hs.shape[0] - 1
+            per_layer = [{} for _ in range(n_layers)]
+
+        # .clone() (not .contiguous()): a contiguous dim-0 slice is a VIEW that
+        # shares the stacked tensor's full storage, so del hs would free nothing
+        # and host-RAM would stay O(N). Cloning makes each layer own its memory
+        # so del hs reclaims the stacked tensor every iteration (true streaming).
+        embedding[sid] = hs[0].clone()
+        for layer in range(n_layers):
+            per_layer[layer][sid] = hs[layer + 1].clone()
+        seq_lens.append(int(hs.shape[1]))
+        stored_question_lens.append(int(q_len))
+        del hs
+
     log.info(
         "saving %d transformer layers (plus embedding) × %d samples",
         n_layers, len(texts),
@@ -107,24 +126,21 @@ def run(ctx: PipelineContext) -> list[str]:
 
     outputs: list[str] = []
 
-    embedding = {sid: hs[0] for sid, hs in zip(sample_ids, hidden_list, strict=True)}
     ctx.store.save_safetensors(OUTPUT_EMBED, embedding)
     outputs.append(OUTPUT_EMBED)
+    del embedding
 
     for layer in range(n_layers):
-        per_sample = {
-            sid: hs[layer + 1]
-            for sid, hs in zip(sample_ids, hidden_list, strict=True)
-        }
         path = _layer_file(layer)
-        ctx.store.save_safetensors(path, per_sample)
+        ctx.store.save_safetensors(path, per_layer[layer])
         outputs.append(path)
+        per_layer[layer] = {}  # release each layer's tensors after it lands
 
     meta = pd.DataFrame(
         {
             "sample_id": sample_ids,
-            "seq_len": [hs.shape[1] for hs in hidden_list],
-            "question_len": question_lens,
+            "seq_len": seq_lens,
+            "question_len": stored_question_lens,
             "n_layers": n_layers,
             "storage": storage,
         }

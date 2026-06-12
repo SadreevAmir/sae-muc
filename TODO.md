@@ -1,6 +1,37 @@
 # TODO
 
 
+## ⬜⬜ HIGH — share the method-independent upstream across runs
+
+Runs that differ only in `intervene.method` (e.g. linear_vuf vs sae_emd on the
+same model/dataset/layers) recompute an IDENTICAL upstream — `prepare → generate
+→ judge(VU) → accuracy_judge → semantic_entropy → hidden_states → vuf → detect`
+(~3.5 h at N=2500: generate ~70 min + VU-judge pre ~73 min + SE ~1 h + …). Only
+`sae_features → intervene → evaluate → *_post → diagnostics` actually differ.
+Today we pay that upstream once per method.
+
+Why it can't be done by a plain `--run-id` resume now:
+- **Manifests are existence-only, no config hash** (`artifacts/manifest.py`): the
+  runner can't tell which stages a `method` change invalidates, so it would skip
+  the wrong things (also the root cause of the alpha_max-resume caveat).
+- **`sae_features` runs as a no-op stub on a linear run**, so resuming sae into a
+  linear run dir would SKIP it and never compute the real consensus features.
+
+Fix options (pick one):
+1. **Config-hash-aware per-stage manifests** — each stage records a hash of its
+   relevant config slice + its input manifests; re-runs iff that hash changed.
+   General fix: changing `method` correctly invalidates `sae_features`/`intervene`
+   onward while keeping `generate…detect` valid. Also fixes alpha_max resume.
+2. **Explicit upstream import** — `upstream_from: <run_id>` config field (or
+   `--reuse-upstream <run_id>`) that symlinks/imports the shared upstream
+   artefacts so only the method-specific tail runs.
+
+Payoff scales with N and with the number of method / alpha_max variants (a sweep
+re-pays the whole upstream per variant today). NOTE: when the two runs execute in
+PARALLEL on separate GPUs the duplicated upstream is free in wall-clock — this
+optimisation mainly helps sequential / single-card and multi-variant sweeps.
+
+
 ## ⬜ Multi-GPU (deferred — single-card assumption baked in)
 
 - [ ] `models/hf_local.py` pins the model to `cuda:0` (single visible card via
