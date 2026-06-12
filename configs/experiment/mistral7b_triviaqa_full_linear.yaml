@@ -1,0 +1,46 @@
+# FULL run: paper MUC (linear_vuf) on Mistral-7B-Instruct-v0.3 x TriviaQA, N=2500.
+# Apples-to-apples with mistral7b_triviaqa_full_sae.yaml (same layers [16,24]).
+# alpha_max=paper -> 0.4 gain (App G.1, Mistral). Judge = CherryIn qwen3-235b
+# (concurrency=8, from the judge fragment). diagnostics off (first full run
+# focuses on the headline + SAE stats; enable later for side-effect/KL numbers).
+#
+# Run: scripts/docker/run.sh <gpu_idx> run --config configs/experiment/mistral7b_triviaqa_full_linear.yaml
+# Requires HF_TOKEN (Mistral license) + CHERRYIN_API_KEY in .env.
+
+extends: ../base.yaml
+
+model: ../model/mistral7b.yaml
+judge: ../judge/cherryin_qwen3_235b.yaml
+nli:   ../nli/deberta_v2_xxlarge.yaml
+
+dataset:
+  name: triviaqa
+  split: validation
+  n_samples: 2500
+  seed: 42
+
+stages:
+  generate:
+    n_samples: 10
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 100
+    prompt_regime: split
+  vuf:
+    layers: [16, 24]
+    selection: top_n         # paper §3.1 validation protocol
+    n_top: 250
+    n_bot: 250
+    pooling: last_token_q
+  detect:
+    detector_method: combined
+  intervene:
+    method: linear_vuf
+    mode: adaptive
+    alpha_max: paper          # Mistral -> 0.4, applied as a gain
+    layer: [16, 24]
+    gate_by_detector: false
+  diagnostics:
+    enabled: false
+
+seed: 42

@@ -1,0 +1,62 @@
+# FULL run: SAE-based MUC (sae_emd) on Mistral-7B-Instruct-v0.3 x TriviaQA, N=2500.
+# SAME layers [16,24] as the linear full run (apples-to-apples). SAE feature
+# selection = CONSENSUS: bootstrap (n=200) + FDR + Cohen's d, for statistically
+# grounded SAE-latent selection (this is why N is large). alpha_max=paper -> 0.4
+# gain (App G.1, Mistral; note 0.4 is the paper value for linear_vuf — sae_emd is
+# our extension, so treat it as a starting point). Judge = CherryIn qwen3-235b
+# (concurrency=8). diagnostics off for the first full run.
+#
+# Run: scripts/docker/run.sh <gpu_idx> run --config configs/experiment/mistral7b_triviaqa_full_sae.yaml
+# Requires HF_TOKEN (Mistral license) + CHERRYIN_API_KEY in .env.
+
+extends: ../base.yaml
+
+model: ../model/mistral7b.yaml
+judge: ../judge/cherryin_qwen3_235b.yaml
+nli:   ../nli/deberta_v2_xxlarge.yaml
+
+dataset:
+  name: triviaqa
+  split: validation
+  n_samples: 2500
+  seed: 42
+
+sae:
+  provider: sae_lens
+  release: mistral-7b-res-wg
+  sae_id_overrides:
+    16: blocks.16.hook_resid_pre
+    24: blocks.24.hook_resid_pre
+
+stages:
+  generate:
+    n_samples: 10
+    temperature_low: 0.1
+    temperature_high: 1.0
+    max_new_tokens: 100
+    prompt_regime: split
+  vuf:
+    layers: [16, 24]
+    selection: top_n
+    n_top: 250
+    n_bot: 250
+    pooling: last_token_q
+  sae_features:
+    selection_mode: consensus   # bootstrap + FDR + Cohen's d (stat-grounded)
+    bootstrap_n: 200
+    bootstrap_freq_threshold: 0.8
+    fdr_alpha: 0.05
+    cohens_d_threshold: 0.3
+  detect:
+    detector_method: combined
+  intervene:
+    method: sae_emd
+    mode: adaptive
+    alpha_max: paper
+    layer: [16, 24]
+    sae_emd_delta: cohen_d
+    gate_by_detector: false
+  diagnostics:
+    enabled: false
+
+seed: 42
