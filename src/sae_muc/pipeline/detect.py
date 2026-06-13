@@ -159,6 +159,23 @@ def _nan_probs(n: int) -> np.ndarray:
     return np.full(n, float("nan"))
 
 
+def _predict_proba_full(clf: LogisticRegression, X_all: np.ndarray) -> np.ndarray:
+    """P(hallucinate) over every row, leaving NaN-feature rows as NaN.
+
+    The detector is fit only on the trainable rows, but predictions are written
+    for the whole frame (refusals included). A question whose VU could not be
+    measured (judge entirely failed) carries a NaN feature; sklearn's
+    `predict_proba` rejects NaN inputs, so we score only the finite rows and
+    leave the rest NaN. With no NaN every row is finite -> identical to a plain
+    `clf.predict_proba(X_all)[:, 1]`.
+    """
+    out = _nan_probs(X_all.shape[0])
+    finite = np.isfinite(X_all).all(axis=1)
+    if finite.any():
+        out[finite] = clf.predict_proba(X_all[finite])[:, 1]
+    return out
+
+
 def _load_pooled_hidden(
     ctx: PipelineContext,
     sample_ids: list[str],
@@ -316,17 +333,27 @@ def run(ctx: PipelineContext) -> list[str]:
         or bool(baselines)
     )
 
-    trainable = df[(~df["is_refusal"]) & df["is_hallucinated"].notna()].copy()
+    # Exclude questions whose VU could not be measured (all sample judge calls
+    # failed -> NaN per-question mean): sklearn LR/Ridge reject NaN features.
+    # SE is NLI-derived and never judge-NaN, but guard it too for safety.
+    n_vu_nan = int(df["vu"].isna().sum())
+    trainable = df[
+        (~df["is_refusal"])
+        & df["is_hallucinated"].notna()
+        & df["vu"].notna()
+        & df["se"].notna()
+    ].copy()
     log.info(
-        "fitting LR detector on %d trainable (%d refusals excluded, %d hallucinated; "
-        "input=%s, method=%s, baselines=%s)",
-        len(trainable), int(df["is_refusal"].sum()),
+        "fitting LR detector on %d trainable (%d refusals, %d judge-failed VU=NaN "
+        "excluded, %d hallucinated; input=%s, method=%s, baselines=%s)",
+        len(trainable), int(df["is_refusal"].sum()), n_vu_nan,
         int(trainable["is_hallucinated"].sum()) if not trainable.empty else 0,
         detector_input, method, baselines or "none",
     )
     metrics: dict[str, Any] = {
         "n_total": int(len(df)),
         "n_refusal": int(df["is_refusal"].sum()),
+        "n_vu_failed": n_vu_nan,
         "n_trainable": int(len(trainable)),
         "n_hallucinated": int(trainable["is_hallucinated"].sum())
         if not trainable.empty
@@ -421,8 +448,9 @@ def run(ctx: PipelineContext) -> list[str]:
             ),
             "n_features": len(cols),
         }
-        # Predict on every row (trainable + refusals); all features are filled.
-        df[f"prob_hallucinate_{name}"] = clf.predict_proba(X_all)[:, 1]
+        # Predict on every finite row (trainable + refusals); judge-failed rows
+        # (NaN VU feature) stay NaN — sklearn rejects NaN inputs.
+        df[f"prob_hallucinate_{name}"] = _predict_proba_full(clf, X_all)
 
     if use_classifier_probe:
         # Train a hidden-state classifier probe over `detector_layers`, then
@@ -442,7 +470,7 @@ def run(ctx: PipelineContext) -> list[str]:
             "n_features": int(hidden_all.shape[1]),
             "layers": [int(l) for l in detector_layers],
         }
-        df["prob_hallucinate_hidden"] = clf_h.predict_proba(hidden_all)[:, 1]
+        df["prob_hallucinate_hidden"] = _predict_proba_full(clf_h, hidden_all)
 
         if method == "combined":
             full_all = np.concatenate(
@@ -460,7 +488,7 @@ def run(ctx: PipelineContext) -> list[str]:
                 ),
                 "n_features": int(full_all.shape[1]),
             }
-            df["prob_hallucinate_combined_full"] = clf_full.predict_proba(full_all)[:, 1]
+            df["prob_hallucinate_combined_full"] = _predict_proba_full(clf_full, full_all)
 
     if "sep" in baselines:
         prob_sep, sep_metrics = _fit_sep_baseline(

@@ -130,6 +130,24 @@ def test_detect_excludes_refusals_from_trainable(fake_ctx):
     assert df["prob_hallucinate_combined"].notna().all()
 
 
+def test_detect_excludes_judge_failed_nan_vu(fake_ctx):
+    """A question whose sample VU calls all failed (NaN per-question mean) must be
+    dropped from the LR-trainable set, not crash sklearn ('Input X contains NaN')."""
+    _seed_detect_artefacts(fake_ctx, n=20, n_hallucinated=10, n_refusal=0)
+    # Simulate every sample judge call for q0 failing -> NaN per-question VU.
+    judge = fake_ctx.store.load_parquet("judge_scores.parquet")
+    mask = (judge["sample_id"] == "q0") & (judge["kind"] == "sample")
+    judge.loc[mask, "vu_score"] = np.nan
+    fake_ctx.store.save_parquet("judge_scores.parquet", judge)
+
+    outputs = detect.run(fake_ctx)  # must NOT raise ValueError: Input X contains NaN
+    assert outputs
+
+    metrics = fake_ctx.store.load_json("detection_metrics.json")
+    assert metrics["n_vu_failed"] == 1
+    assert metrics["n_trainable"] == 19  # 20 - 1 judge-failed (0 refusals)
+
+
 def test_detect_handles_insufficient_data(fake_ctx):
     _seed_detect_artefacts(fake_ctx, n=3, n_hallucinated=0, n_refusal=0)
     detect.run(fake_ctx)

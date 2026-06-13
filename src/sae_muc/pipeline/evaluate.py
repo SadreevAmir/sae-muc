@@ -82,8 +82,15 @@ def build_frame_from_paths(
     refusal_threshold = float(ctx.cfg.stages.detect.refusal_vu_threshold)
 
     rows: list[dict] = []
+    n_vu_nan = 0
     for sid in greedy.index:
         if sid not in se.index or sid not in vu_per_q.index:
+            continue
+        # Skip questions whose VU is NaN (judge entirely failed): NaN poisons the
+        # Pearson correlation and silently miscounts confident-hallucination and
+        # vu/su-disagreement (NaN < t evaluates False). Treated as a judge failure.
+        if pd.isna(vu_per_q.loc[sid]):
+            n_vu_nan += 1
             continue
         correct_raw = accuracy.loc[sid, "is_correct"] if sid in accuracy.index else None
         is_correct = bool(correct_raw) if pd.notna(correct_raw) else None
@@ -98,6 +105,8 @@ def build_frame_from_paths(
                 "is_refusal": bool(refusal),
             }
         )
+    if n_vu_nan:
+        log.info("evaluate: excluded %d questions with unmeasurable VU (judge failed)", n_vu_nan)
     return pd.DataFrame(rows)
 
 

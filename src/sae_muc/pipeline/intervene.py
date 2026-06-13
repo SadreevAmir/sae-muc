@@ -428,14 +428,28 @@ def _compute_adaptive_alphas(
     se = se_df["semantic_entropy"]
     n_samples_col = se_df["n_samples"]
 
-    su = np.asarray([float(se.loc[sid]) for sid in sample_ids], dtype=float)
-    vu = np.asarray([float(vu_per_q.loc[sid]) for sid in sample_ids], dtype=float)
-    n_samples = np.asarray([int(n_samples_col.loc[sid]) for sid in sample_ids], dtype=int)
+    # reindex (not per-sid .loc): a question missing from the SE/judge frames
+    # (all its generations or judge calls failed) yields NaN instead of a
+    # KeyError. su NaN -> su_norm 0 below; vu NaN -> handled after the clip.
+    su = se.reindex(sample_ids).to_numpy(dtype=float)
+    vu = vu_per_q.reindex(sample_ids).to_numpy(dtype=float)
+    n_samples = n_samples_col.reindex(sample_ids).to_numpy(dtype=float)
 
-    log_n = np.where(n_samples > 1, np.log(np.maximum(n_samples, 2)), 0.0)
+    log_n = np.where(n_samples > 1, np.log(np.maximum(n_samples, 2.0)), 0.0)
     su_norm = np.where(log_n > 0, su / log_n, 0.0)
 
     alpha = np.clip((su_norm - vu) * float(alpha_max), 0.0, float(alpha_max))
+    # A question whose VU/SE could not be measured (judge entirely failed, or it
+    # is absent from the SE frame) yields NaN alpha. Steer it with alpha=0 (no
+    # intervention, reuse baseline) instead of adding NaN*direction to the
+    # residual stream, which would NaN the whole forward and emit garbage.
+    n_alpha_nan = int(np.isnan(alpha).sum())
+    if n_alpha_nan:
+        log.warning(
+            "adaptive alpha: %d/%d questions had unmeasurable VU/SE -> alpha=0 (no steering)",
+            n_alpha_nan, len(alpha),
+        )
+    alpha = np.nan_to_num(alpha, nan=0.0)
     return pd.DataFrame(
         {
             "sample_id": sample_ids,
