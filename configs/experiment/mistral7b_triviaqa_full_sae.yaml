@@ -12,7 +12,7 @@
 extends: ../base.yaml
 
 model: ../model/mistral7b.yaml
-judge: ../judge/cherryin_qwen3_235b.yaml
+judge: ../judge/openrouter_qwen3_235b.yaml
 nli:   ../nli/deberta_v2_xxlarge.yaml
 
 dataset:

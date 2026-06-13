@@ -1,0 +1,12 @@
+# Same Qwen3-235B non-thinking instruct judge as cherryin_qwen3_235b, but via
+# OpenRouter. Reason: CherryIn enforces a HARD 4950 successful-requests / 30 min
+# PER-ACCOUNT cap (shared with teammates, not raisable by us) that broke the
+# full run. OpenRouter has NO such cap — limits are per-key + credit-scaled
+# (~1 req/s per credit, 200 req/s ceiling), so concurrency=8 (~6 req/s) runs fine.
+# Model id is the NON-thinking -2507 variant (NOT ...-thinking-2507). ~$0.09/1M
+# in, $0.10/1M out (≈ CherryIn price). Keep the OpenRouter balance >= ~$30 so the
+# credit-scaled rate stays >= 6 req/s for the whole run. OPENROUTER_API_KEY in .env.
+provider: openrouter
+model: qwen/qwen3-235b-a22b-2507
+max_retries: 3
+concurrency: 8
