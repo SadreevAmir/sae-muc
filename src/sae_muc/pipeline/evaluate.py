@@ -33,12 +33,13 @@ import logging
 import numpy as np
 import pandas as pd
 
-from sae_muc.pipeline._utils import PROMPT_PLAIN, select_prompt_kind
+from sae_muc.pipeline._utils import PROMPT_PLAIN, load_split_map, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
 
 OUTPUT = "metrics.json"
+OUTPUT_HELDOUT = "metrics.heldout.json"
 
 
 def _safe_mean(values: pd.Series) -> float:
@@ -252,15 +253,8 @@ def _abstention_categories(
     }
 
 
-def run(ctx: PipelineContext) -> list[str]:
-    df = _build_frame(ctx)
-    log.info(
-        "computing Tab.3 metrics on %d samples (%d correct, %d refusals)",
-        len(df),
-        int(df["is_correct"].fillna(False).sum()),
-        int(df["is_refusal"].sum()),
-    )
-    eval_cfg = ctx.cfg.stages.evaluate
+def _metrics_for(ctx: PipelineContext, df: pd.DataFrame, eval_cfg, label: str) -> dict:
+    """Resolve thresholds on `df`, compute Tab.3 metrics + abstention categories."""
     vu_t, su_t = _resolve_thresholds(
         df,
         vu_mode=eval_cfg.vu_threshold_mode,
@@ -269,12 +263,31 @@ def run(ctx: PipelineContext) -> list[str]:
         su_fallback=eval_cfg.su_threshold,
     )
     log.info(
-        "thresholds: vu_mode=%s → %.3f, su_mode=%s → %.3f",
-        eval_cfg.vu_threshold_mode, vu_t, eval_cfg.su_threshold_mode, su_t,
+        "[%s] %d samples (%d correct, %d refusals); thresholds vu=%.3f su=%.3f",
+        label, len(df),
+        int(df["is_correct"].fillna(False).sum()), int(df["is_refusal"].sum()),
+        vu_t, su_t,
     )
     metrics = _compute_metrics(df, vu_threshold=vu_t, su_threshold=su_t)
     metrics["abstention_categories"] = _abstention_categories(
         ctx, df, float(ctx.cfg.stages.detect.refusal_vu_threshold)
     )
-    ctx.store.save_json(OUTPUT, metrics)
-    return [OUTPUT]
+    return metrics
+
+
+def run(ctx: PipelineContext) -> list[str]:
+    df = _build_frame(ctx)
+    df["split"] = df["sample_id"].map(load_split_map(ctx)).fillna("main")
+    eval_cfg = ctx.cfg.stages.evaluate
+
+    outputs: list[str] = []
+    for split_name, out_name in (("main", OUTPUT), ("heldout", OUTPUT_HELDOUT)):
+        sub = df[df["split"] == split_name]
+        # main always written (== full frame when no held-out exists, so the
+        # legacy metrics.json is byte-for-byte unchanged); heldout only when present.
+        if split_name == "heldout" and sub.empty:
+            continue
+        metrics = _metrics_for(ctx, sub, eval_cfg, label=split_name)
+        ctx.store.save_json(out_name, metrics)
+        outputs.append(out_name)
+    return outputs

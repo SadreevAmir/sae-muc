@@ -32,6 +32,28 @@ PROMPT_PLAIN = "plain"
 PROMPT_ELICITING = "eliciting"
 
 
+def load_split_map(ctx) -> "pd.Series":
+    """sample_id -> split ('main' / 'heldout').
+
+    Held-out questions are carried through the pipeline but excluded from every
+    fit (VUF / SAE / detector). Runs predating the feature have no `split`
+    column in samples.parquet -> everything defaults to 'main', so all callers
+    behave exactly as before.
+    """
+    import pandas as pd
+
+    samples = ctx.store.load_parquet("samples.parquet")
+    if "split" not in samples.columns:
+        return pd.Series("main", index=samples["sample_id"], name="split")
+    return samples.set_index("sample_id")["split"]
+
+
+def main_sample_ids(ctx) -> set:
+    """The set of split=='main' sample_ids (used to exclude held-out from fits)."""
+    smap = load_split_map(ctx)
+    return set(smap.index[smap == "main"])
+
+
 def select_prompt_kind(df: "pd.DataFrame", want: str) -> "pd.DataFrame":
     """Rows with prompt_kind == `want`; pass `df` through if it is absent.
 

@@ -36,22 +36,31 @@ def _hf_load_parquet(repo_id: str, filename: str) -> Any:
 
 
 def load_samples(cfg: DatasetConfig) -> list[Sample]:
-    """Load, shuffle deterministically, take the first `n_samples`, normalise."""
+    """Load, shuffle deterministically, take `n_samples` (+ `heldout_n`), normalise.
+
+    The first `n_samples` are tagged split="main"; the next `heldout_n` (drawn
+    from the same shuffle, so disjoint by construction) are split="heldout".
+    """
     if cfg.name == "triviaqa":
-        return _load_triviaqa(cfg)
-    if cfg.name == "nq_open":
-        return _load_nq_open(cfg)
-    if cfg.name == "popqa":
-        return _load_popqa(cfg)
-    if cfg.name == "fake":
-        return _load_fake(cfg)
-    raise ValueError(f"Unknown dataset: {cfg.name!r}")
+        samples = _load_triviaqa(cfg)
+    elif cfg.name == "nq_open":
+        samples = _load_nq_open(cfg)
+    elif cfg.name == "popqa":
+        samples = _load_popqa(cfg)
+    elif cfg.name == "fake":
+        samples = _load_fake(cfg)
+    else:
+        raise ValueError(f"Unknown dataset: {cfg.name!r}")
+    return [
+        s.model_copy(update={"split": "main" if i < cfg.n_samples else "heldout"})
+        for i, s in enumerate(samples)
+    ]
 
 
 def _take(ds: Any, cfg: DatasetConfig) -> Any:
-    """Shuffle with the configured seed and take up to `n_samples`."""
+    """Shuffle with the configured seed and take `n_samples` + `heldout_n`."""
     ds = ds.shuffle(seed=cfg.seed)
-    n = min(cfg.n_samples, len(ds))
+    n = min(cfg.n_samples + cfg.heldout_n, len(ds))
     return ds.select(range(n))
 
 
@@ -87,7 +96,7 @@ def _load_nq_open(cfg: DatasetConfig) -> list[Sample]:
         f"nq_open/{cfg.split}-00000-of-00001.parquet",
     )
     df = df.sample(frac=1, random_state=cfg.seed).reset_index(drop=True)
-    df = df.head(cfg.n_samples)
+    df = df.head(cfg.n_samples + cfg.heldout_n)
     return [
         Sample(
             sample_id=f"nq_open:{cfg.split}:{i}",
@@ -111,7 +120,7 @@ def _load_fake(cfg: DatasetConfig) -> list[Sample]:
         "five", "six", "seven", "eight", "nine",
     ]
     samples: list[Sample] = []
-    for i in range(cfg.n_samples):
+    for i in range(cfg.n_samples + cfg.heldout_n):
         num = (cfg.seed + i) % len(_WORDS)
         samples.append(
             Sample(

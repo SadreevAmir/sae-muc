@@ -21,8 +21,8 @@ OUTPUT = "samples.parquet"
 def run(ctx: PipelineContext) -> list[str]:
     cfg = ctx.cfg.dataset
     log.info(
-        "loading dataset %s (split=%s, n=%d, seed=%d)",
-        cfg.name, cfg.split, cfg.n_samples, cfg.seed,
+        "loading dataset %s (split=%s, n=%d, heldout=%d, seed=%d)",
+        cfg.name, cfg.split, cfg.n_samples, cfg.heldout_n, cfg.seed,
     )
     samples = load_samples(ctx.cfg.dataset)
     df = pd.DataFrame(
@@ -30,6 +30,7 @@ def run(ctx: PipelineContext) -> list[str]:
             "sample_id": [s.sample_id for s in samples],
             "question": [s.question for s in samples],
             "gold_answers": [list(s.gold_answers) for s in samples],
+            "split": [s.split for s in samples],
         }
     )
     ctx.store.save_parquet(OUTPUT, df)

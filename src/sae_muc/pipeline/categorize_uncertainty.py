@@ -38,7 +38,7 @@ from typing import Any
 import pandas as pd
 
 from sae_muc.data.prompts import format_categorize_prompt
-from sae_muc.pipeline._utils import PROMPT_ELICITING, select_prompt_kind
+from sae_muc.pipeline._utils import PROMPT_ELICITING, main_sample_ids, select_prompt_kind
 from sae_muc.pipeline.context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -133,6 +133,9 @@ def run(ctx: PipelineContext) -> list[str]:
     samples = ctx.store.load_parquet("samples.parquet").set_index("sample_id")
 
     vu_per_q = _per_question_mean_vu(judge_df)
+    # Categorisation is fit-prep for per-category VUF directions, so restrict it
+    # to the main split — held-out questions must stay out of every fit.
+    vu_per_q = vu_per_q[vu_per_q.index.isin(main_sample_ids(ctx))]
     threshold = float(ctx.cfg.stages.vuf.vu_uncertain_min)
     uncertain_ids = set(vu_per_q.index[vu_per_q >= threshold].tolist())
 

@@ -67,6 +67,7 @@ from sae_muc.pipeline._utils import (
     PROMPT_PLAIN,
     _pool,
     _resolve_layers,
+    main_sample_ids,
     select_prompt_kind,
 )
 from sae_muc.pipeline.context import PipelineContext
@@ -337,11 +338,15 @@ def run(ctx: PipelineContext) -> list[str]:
     # failed -> NaN per-question mean): sklearn LR/Ridge reject NaN features.
     # SE is NLI-derived and never judge-NaN, but guard it too for safety.
     n_vu_nan = int(df["vu"].isna().sum())
+    # Fit the detector on the main split only; held-out questions stay out of
+    # every fit (predictions are still written for all rows downstream).
+    main_ids = main_sample_ids(ctx)
     trainable = df[
         (~df["is_refusal"])
         & df["is_hallucinated"].notna()
         & df["vu"].notna()
         & df["se"].notna()
+        & df["sample_id"].isin(main_ids)
     ].copy()
     log.info(
         "fitting LR detector on %d trainable (%d refusals, %d judge-failed VU=NaN "

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from sae_muc.pipeline._utils import _pool
+from sae_muc.pipeline._utils import _pool, main_sample_ids
 from sae_muc.pipeline.context import PipelineContext
 
 if TYPE_CHECKING:
@@ -141,6 +141,9 @@ def run(ctx: PipelineContext) -> list[str]:
 
     judge = ctx.store.load_parquet("judge_scores.parquet")
     vu_per_q = _per_question_mean_vu(judge)
+    # The VUF direction must be fit on the main split only — held-out questions
+    # are excluded so they stay a contamination-free evaluation set.
+    vu_per_q = vu_per_q[vu_per_q.index.isin(main_sample_ids(ctx))]
     if stage_cfg.selection == "vu_threshold":
         uncertain_ids, certain_ids = _split_ids_by_threshold(
             vu_per_q,

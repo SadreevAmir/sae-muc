@@ -32,6 +32,11 @@ class DatasetConfig(_Frozen):
     split: str = "validation"
     n_samples: int = 500
     seed: int = 42
+    # Extra disjoint held-out questions drawn from the same shuffle at offset
+    # n_samples (so they never overlap the main set). Carried through the
+    # pipeline but excluded from VUF/SAE/detector fitting; evaluated separately
+    # for a contamination-free read on the intervention. 0 = feature off.
+    heldout_n: int = Field(default=0, ge=0)
 
 
 class JudgeConfig(_Frozen):

@@ -17,6 +17,11 @@ dataset:
   name: triviaqa
   split: validation
   n_samples: 2500
+  # 500 disjoint held-out questions (offset 2500 in the same shuffle): carried
+  # through the pipeline but excluded from VUF/SAE/detector fitting, evaluated
+  # separately (metrics.heldout.json) for a contamination-free read on the
+  # intervention. The VUF direction is fit on the 2500 main only.
+  heldout_n: 500
   seed: 42
 
 stages:
