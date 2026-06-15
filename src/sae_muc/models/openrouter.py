@@ -22,7 +22,14 @@ class MissingAPIKeyError(RuntimeError):
 class OpenRouterBackend:
     BASE_URL = "https://openrouter.ai/api/v1"
 
-    def __init__(self, model: str, *, max_retries: int = 3, timeout: float = 60.0) -> None:
+    def __init__(
+        self,
+        model: str,
+        *,
+        max_retries: int = 3,
+        timeout: float = 60.0,
+        provider_only: list[str] | None = None,
+    ) -> None:
         api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not api_key:
             raise MissingAPIKeyError(
@@ -31,6 +38,7 @@ class OpenRouterBackend:
         self.name = model
         self._model = model
         self._max_retries = max_retries
+        self._provider_only = list(provider_only) if provider_only else None
         self._client = OpenAI(base_url=self.BASE_URL, api_key=api_key, timeout=timeout)
 
     def generate(
@@ -78,7 +86,12 @@ class OpenRouterBackend:
         # prompts cap completions at 8-16 tokens; reasoning models would
         # blow that budget on hidden CoT and emit empty content. OpenRouter
         # ignores this field for non-reasoning models, so it's safe by default.
-        extra_body = {"reasoning": {"enabled": False}}
+        extra_body: dict = {"reasoning": {"enabled": False}}
+        # Pin routing to verified-good upstreams when configured: OpenRouter
+        # otherwise load-balances onto providers (e.g. DeepInfra) whose endpoint
+        # emits truncated prose instead of the bare number -> unparseable VU.
+        if self._provider_only:
+            extra_body["provider"] = {"only": self._provider_only}
         delay = 1.0
         last_exc: Exception | None = None
         for _ in range(self._max_retries):

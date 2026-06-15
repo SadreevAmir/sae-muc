@@ -38,6 +38,12 @@ class JudgeConfig(_Frozen):
     provider: Literal["openrouter", "cherryin", "fake"]
     model: str
     max_retries: int = 3
+    # OpenRouter only: whitelist of upstream provider names to route to (e.g.
+    # ["Novita", "Alibaba"]). OpenRouter load-balances a model slug across many
+    # providers; some serve a variant that ignores the bare-number judge format
+    # and emit truncated prose -> unparseable VU. Pinning to verified-good
+    # providers removes those parse failures. None = let OpenRouter route freely.
+    provider_only: list[str] | None = None
     # Number of judge calls kept in flight at once via a continuous worker
     # pool (judge / accuracy_judge stages). 1 (default) is sequential and
     # byte-identical to the pre-pool behaviour; raise it for remote backends

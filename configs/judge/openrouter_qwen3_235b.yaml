@@ -10,3 +10,16 @@ provider: openrouter
 model: qwen/qwen3-235b-a22b-2507
 max_retries: 3
 concurrency: 8
+# Pin to upstreams verified to emit the bare-number / yes-no judge format.
+# DeepInfra returns truncated prose -> unparseable VU; on the full TriviaQA runs
+# this drove an 11-36% parse-failure rate (varying with how much traffic OR
+# routed to it) that corrupted correct_rate and before/after intervention deltas.
+# All providers below scored 100% parse over a live probe (2026-06-15), ordered
+# ~by latency. Together excluded (81% uptime), WandB excluded (flaky availability).
+provider_only:
+  - Parasail
+  - Alibaba
+  - StreamLake
+  - AtlasCloud
+  - Novita
+  - Google

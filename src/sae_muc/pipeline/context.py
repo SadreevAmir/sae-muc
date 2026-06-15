@@ -48,7 +48,10 @@ def build_context(cfg: ExperimentConfig, *, run_id: str | None = None) -> tuple[
     rid, store = make_run(cfg, run_id=run_id)
     llm = build_llm_backend(cfg.model.provider, cfg.model.name, dtype=cfg.model.dtype)
     judge = build_llm_backend(
-        cfg.judge.provider, cfg.judge.model, max_retries=cfg.judge.max_retries
+        cfg.judge.provider,
+        cfg.judge.model,
+        max_retries=cfg.judge.max_retries,
+        provider_only=cfg.judge.provider_only,
     )
     nli = build_nli_backend(cfg.nli.provider, cfg.nli.model)
     saes = build_sae_registry(cfg.sae, _candidate_sae_layers(cfg.sae))

@@ -15,11 +15,14 @@ def build_llm_backend(
     *,
     dtype: str = "bfloat16",
     max_retries: int = 3,
+    provider_only: list[str] | None = None,
 ) -> LLMBackend:
     if provider == "fake":
         return FakeBackend(name=model)
     if provider == "openrouter":
-        return OpenRouterBackend(model=model, max_retries=max_retries)
+        return OpenRouterBackend(
+            model=model, max_retries=max_retries, provider_only=provider_only
+        )
     if provider == "cherryin":
         return CherryInBackend(model=model, max_retries=max_retries)
     if provider == "hf_local":
