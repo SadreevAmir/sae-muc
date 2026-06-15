@@ -43,10 +43,26 @@ def run(
     force_all: bool = typer.Option(
         False, "--force-all", help="Ignore stage manifests; recompute every stage."
     ),
+    force_stage: str | None = typer.Option(
+        None,
+        "--force-stage",
+        help="Comma-separated stage names to force (ignore only their manifests); "
+        "every other stage still resumes from cache. Forcing a stage does NOT "
+        "auto-force its dependents — list every stage you want recomputed.",
+    ),
 ) -> None:
     """Run one or all pipeline stages for the given experiment config."""
     from sae_muc.config import load_experiment_config
     from sae_muc.pipeline import STAGES, build_context, run_all, run_stage
+
+    force_set: set[str] = set()
+    if force_stage:
+        force_set = {s.strip() for s in force_stage.split(",") if s.strip()}
+        unknown = force_set - set(STAGES)
+        if unknown:
+            raise typer.BadParameter(
+                f"Unknown stage(s) {sorted(unknown)}. Known: {sorted(STAGES)}"
+            )
 
     cfg = load_experiment_config(config)
     rid, ctx = build_context(cfg, run_id=run_id)
@@ -64,7 +80,7 @@ def run(
 
     try:
         if stage == "all":
-            run_all(ctx, force_all=force_all)
+            run_all(ctx, force=force_set, force_all=force_all)
         else:
             if stage not in STAGES:
                 raise typer.BadParameter(
